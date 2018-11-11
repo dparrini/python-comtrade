@@ -298,15 +298,15 @@ class Comtrade:
         return self._digital_channel_ids
 
     @property
-    def time_values(self):
+    def time(self):
         return self._time_values
 
     @property
-    def analog_values(self):
+    def analog(self):
         return self._analog_values
     
     @property
-    def digital_values(self):
+    def digital(self):
         return self._digital_values
 
     @property
@@ -386,9 +386,9 @@ class Comtrade:
         dat.read(dat_lines, self._cfg)
 
         # copy dat object information
-        self._time_values    = dat.time_values
-        self._analog_values  = dat.analog_values
-        self._digital_values = dat.digital_values
+        self._time_values    = dat.time
+        self._analog_values  = dat.analog
+        self._digital_values = dat.digital
         self._total_samples  = dat.total_samples
 
     def load(self, cfg_filepath, dat_filepath):
@@ -402,9 +402,9 @@ class Comtrade:
         dat.load(dat_filepath, self._cfg)
 
         # copy dat object information
-        self._time_values    = dat.time_values
-        self._analog_values  = dat.analog_values
-        self._digital_values = dat.digital_values
+        self._time_values    = dat.time
+        self._analog_values  = dat.analog
+        self._digital_values = dat.digital
         self._total_samples  = dat.total_samples
 
     def load_cff(self, cff_filepath):
@@ -494,9 +494,9 @@ class DatReader:
         self.filepath = ""
         self._content = None
         self._cfg = None
-        self.time_values = []
-        self.analog_values = []
-        self.digital_values = []
+        self.time = []
+        self.analog = []
+        self.digital = []
         self._total_samples = 0
 
     @property
@@ -533,14 +533,14 @@ class DatReader:
         digital_count = self._cfg.digital_count
 
         # preallocate analog and digital values
-        self.time_values = [0.0] * steps
-        self.analog_values  = [None] * analog_count
-        self.digital_values = [None] * digital_count
+        self.time = [0.0] * steps
+        self.analog  = [None] * analog_count
+        self.digital = [None] * digital_count
         # preallocate each channel values with zeros
         for i in range(analog_count):
-            self.analog_values[i]  = [0.0] * steps
+            self.analog[i]  = [0.0] * steps
         for i in range(digital_count):
-            self.digital_values[i] = [0]   * steps
+            self.digital[i] = [0]   * steps
 
     def parse(self, contents):
         pass
@@ -577,11 +577,11 @@ class AsciiDatReader(DatReader):
                 dvalues = [int(x) for x in values[analog_count+2:]]
 
                 # store
-                self.time_values[line_number-1] = t
+                self.time[line_number-1] = t
                 for i in range(analog_count):
-                    self.analog_values[i][line_number - 1]  = avalues[i]
+                    self.analog[i][line_number - 1]  = avalues[i]
                 for i in range(digital_count):
-                    self.digital_values[i][line_number - 1] = dvalues[i]
+                    self.digital[i][line_number - 1] = dvalues[i]
 
 
 class BinaryDatReader(DatReader):
@@ -639,7 +639,7 @@ class BinaryDatReader(DatReader):
             # time
             t = (n - 1) / frequency
 
-            self.time_values[irow] = t
+            self.time[irow] = t
             # extract channel values
             offset_start = sample_id_bytes
             for ichannel in range(achannels):
@@ -647,7 +647,7 @@ class BinaryDatReader(DatReader):
                 ybyte = row[offset:offset + self.ANALOG_BYTES]
                 yint = struct.unpack('i', self.pad_bytes(ybyte))[0]
                 y = a[ichannel] * yint + b[ichannel]
-                self.analog_values[ichannel][irow] = y
+                self.analog[ichannel][irow] = y
 
             offset_start = sample_id_bytes + abytes
             groups_of_16bits = math.floor(dbytes / self.DIGITAL_BYTES)
@@ -661,7 +661,7 @@ class BinaryDatReader(DatReader):
                     mask = int('0b01', 2) << chnindex
                     extract = (group & mask) >> chnindex
 
-                    self.digital_values[ichannel][irow] = extract
+                    self.digital[ichannel][irow] = extract
 
             if hasattr(contents, 'read'):
                 row = contents.read(bytes_per_row)
