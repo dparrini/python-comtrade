@@ -244,6 +244,7 @@ class Cfg:
                 samp = float(samp)
                 endsamp = int(endsamp)
                 self.sample_rates.append([samp, endsamp])
+
             if line_count == 4 + self._channels_count + self._nrates:
                 # first data point
                 self._start_timestamp = _read_timestamp(line.strip())
@@ -429,7 +430,6 @@ class Comtrade:
 
         dat = self._get_dat_reader()
         dat.load(dat_filepath, self._cfg)
-
 
         # copy dat object information
         self._dat_extract_data(dat)

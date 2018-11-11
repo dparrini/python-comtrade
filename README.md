@@ -1,6 +1,6 @@
 # Python Comtrade
 
-__Python Comtrade__ is a module designed to read _Common Format for Transient Data Exchange_ (COMTRADE) files. These consists of oscillography data recorded during power system outages, control systems tests, validation and tests of field equipment, protective relaying logs, etc. The COMTRADE format is defined by IEEE Standards, summarized in the table below. Some equipment vendors put additional information in proprietary versions of it. This module aims IEEE definitions but may support those proprietary versions.
+__Python Comtrade__ is a module for Python 3 designed to read _Common Format for Transient Data Exchange_ (COMTRADE) files. These consists of oscillography data recorded during power system outages, control systems tests, validation and tests of field equipment, protective relaying logs, etc. The COMTRADE format is defined by IEEE Standards, summarized in the table below. Some equipment vendors put additional information in proprietary versions of it. This module aims IEEE definitions but may support those proprietary versions.
 
 
 | Standard                            | Revision |
@@ -10,18 +10,18 @@ __Python Comtrade__ is a module designed to read _Common Format for Transient Da
 | IEEE C37.111™-2013 / IEC 60255-24   |  2013    |
 
 
-## Usage
+## How to Use
 
 The examples below shows how to open a CFF file or both CFG and DAT files to plot (using `pyplot`) analog channel oscillography.
 
 ### CFF files (2013 revision)
 
-```
+```py
 import matplotlib.pyplot as plt
 from comtrade import Comtrade
 
 rec = Comtrade()
-rec.load("sample.cff")
+rec.load("sample_files/sample_ascii.cff")
 print("Trigger time = {}s".format(rec.trigger_time))
 
 plt.figure()
@@ -33,12 +33,12 @@ plt.show()
 
 ### CFG and DAT files (all revisions)
 
-```
+```py
 import matplotlib.pyplot as plt
 from comtrade import Comtrade
 
 rec = Comtrade()
-rec.load("sample.cfg", "sample.dat")
+rec.load("sample_files/sample_ascii.cfg", "sample_files/sample_ascii.dat")
 print("Trigger time = {}s".format(rec.trigger_time))
 
 plt.figure()
