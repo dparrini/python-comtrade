@@ -20,11 +20,14 @@ TYPE_BINARY = "BINARY"
 TYPE_BINARY32 = "BINARY32"
 TYPE_FLOAT32 = "FLOAT32"
 
+# CFF headers
+CFF_HEADER_REXP = "(?i)--- file type: ([a-z]+)(?:\\s([a-z]+))? ---$"
+
 # common separator character of data fields of CFG and ASCII DAT files
 SEPARATOR = ","
 
 # timestamp regular expression
-re_dt = re.compile("([0-9]{1,2})/([0-9]{1,2})/([0-9]{4}),([0-9]{2}):([0-9]{2}):([0-9]{2})\\.([0-9]{6,12})")
+re_dt = re.compile("([0-9]{1,2})/([0-9]{1,2})/([0-9]{4}),([0-9]{2}):([0-9]{2}):([0-9]{2})\\.([0-9]{5,12})")
 
 
 def _read_sep_values(line):
@@ -427,35 +430,53 @@ class Comtrade:
         dat = self._get_dat_reader()
         dat.load(dat_filepath, self._cfg)
 
+
         # copy dat object information
         self._dat_extract_data(dat)
 
     def _load_cff(self, cff_filepath):
-        # TODO
+        # stores each file type lines
+        cfg_lines = []
+        dat_lines = []
+        hdr_lines = []
+        inf_lines = []
         with open(cff_filepath, "r") as file:
             line_number = 0
+            # file type: CFG, HDR, INF, DAT
+            ftype = None
+            # file format: ASCII, BINARY, BINARY32, FLOAT32
+            fformat = None
+            header_re = re.compile(CFF_HEADER_REXP)
+            last_match = None
             for line in file:
-                if line.strip().lower() == "--- file type: cfg ---":
-                    # process CFG
-                    pass
-                if line.strip().lower() == "--- file type: inf ---":
-                    # process INF
-                    pass
-                if line.strip().lower() == "--- file type: hdr ---":
-                    # process HDR
-                    pass
-                if line.strip().lower() == "--- file type: dat ascii ---":
-                    # process ASCII DAT file
-                    pass
+                mobj = header_re.match(line.strip().upper())
+                if mobj is not None:
+                    last_match = mobj
+                    ftype   = last_match.groups()[0]
+                    fformat = last_match.groups()[1]
+                    continue
+                if last_match is not None and ftype == "CFG":
+                    cfg_lines.append(line.strip())
 
-            pass
+                if last_match is not None and ftype == "DAT":
+                    dat_lines.append(line.strip())
+
+                if last_match is not None and ftype == "HDR":
+                    hdr_lines.append(line.strip())
+
+                if last_match is not None and ftype == "INF":
+                    inf_lines.append(line.strip())
+        
+        # process CFF data
+        self.read(cfg_lines, dat_lines)
+
 
     def cfg_summary(self):
         st = "Channels (total,A,D): {}A + {}D = {}\n".format(self.analog_count, self.digital_count, self.channels_count)
         st = st + "Line frequency: {} Hz\n".format(self.frequency)
         for i in range(self._cfg.nrates):
             rate, points = self._cfg.sample_rates[i]
-            st = st + "Sample rate of {} Hz until point #{}\n".format(rate, points)
+            st = st + "Sample rate of {} Hz to the sample #{}\n".format(rate, points)
         st = st + "From {} to {} with time mult. = {}\n".format(self.start_timestamp, self.trigger_timestamp, self._cfg.timemult)
         st = st + "{} format\n".format(self.ft)
         return st
