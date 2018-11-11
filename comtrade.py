@@ -235,7 +235,7 @@ class Cfg:
                     self._timestamp_critical = True
                 else:
                     self._timestamp_critical = False
-            if line_count >= 4 + self._channels_count and line_count < 4 + self._channels_count + self._nrates:
+            if line_count > 3 + self._channels_count and line_count <= 3 + self._channels_count + self._nrates:
                 # each sample rate
                 samp, endsamp = _read_sep_values(line)
                 samp = float(samp)
