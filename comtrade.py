@@ -379,35 +379,59 @@ class Comtrade:
         self._cfg.read(cfg_lines)
 
         # channel ids
-        self._analog_channel_ids = [channel.name for channel in self._cfg.analog_channels]
-        self._digital_channel_ids = [channel.name for channel in self._cfg.digital_channels]
+        self._cfg_extract_channels_ids(self._cfg)
 
         dat = self._get_dat_reader()
         dat.read(dat_lines, self._cfg)
 
         # copy dat object information
+        self._dat_extract_data(dat)
+
+    def _cfg_extract_channels_ids(self, cfg):
+        self._analog_channel_ids = [channel.name for channel in cfg.analog_channels]
+        self._digital_channel_ids = [channel.name for channel in cfg.digital_channels]
+
+    def _dat_extract_data(self, dat):
         self._time_values    = dat.time
         self._analog_values  = dat.analog
         self._digital_values = dat.digital
         self._total_samples  = dat.total_samples
 
-    def load(self, cfg_filepath, dat_filepath):
+    def load(self, cfg_file, dat_file = None):
+        # which extension: CFG or CFF?
+        file_ext = cfg_file[-3:].upper()
+        if file_ext == "CFG":
+            # if not informed, infer dat_file with cfg_file
+            if dat_file is None:
+                dat_file = cfg_file[:-3] + "DAT"
+                # print("loading DAT:", dat_file)
+
+            # check if both files exists
+
+            # load both
+            self._load_cfg_dat(cfg_file, dat_file)
+        elif file_ext == "CFF":
+            # check if the CFF file exists
+            # load file
+            self._load_cff(cfg_file)
+        else:
+            # TODO: raise exception: expected CFG file
+            pass
+
+    def _load_cfg_dat(self, cfg_filepath, dat_filepath):
         self._cfg.load(cfg_filepath)
 
         # channel ids
-        self._analog_channel_ids = [channel.name for channel in self._cfg.analog_channels]
-        self._digital_channel_ids = [channel.name for channel in self._cfg.digital_channels]
+        self._cfg_extract_channels_ids(self._cfg)
 
         dat = self._get_dat_reader()
         dat.load(dat_filepath, self._cfg)
 
         # copy dat object information
-        self._time_values    = dat.time
-        self._analog_values  = dat.analog
-        self._digital_values = dat.digital
-        self._total_samples  = dat.total_samples
+        self._dat_extract_data(dat)
 
-    def load_cff(self, cff_filepath):
+    def _load_cff(self, cff_filepath):
+        # TODO
         with open(cff_filepath, "r") as file:
             line_number = 0
             for line in file:
