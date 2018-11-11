@@ -158,6 +158,12 @@ class Cfg:
             raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), 
                 self.filepath)
 
+    def read(self, cfg_lines):
+        if type(cfg_lines) is str:
+            self._read_file(cfg_lines.splitlines())
+        else:
+            self._read_file(cfg_lines)
+
     def _read_file(self, cfg):
         line_count = 0
         self._nrates = 1
@@ -305,7 +311,7 @@ class Comtrade:
 
     @property
     def total_samples(self):
-        return self._cfg.total_samples
+        return self._total_samples
 
     @property
     def frequency(self):
@@ -350,13 +356,8 @@ class Comtrade:
     def __repr__(self):
         pass
 
-    def load(self, cfg_filepath, dat_filepath):
-        self._cfg.load(cfg_filepath)
-
-        # channel ids
-        self._analog_channel_ids = [channel.name for channel in self._cfg.analog_channels]
-        self._digital_channel_ids = [channel.name for channel in self._cfg.digital_channels]
-
+    def _get_dat_reader(self):
+        dat = None
         if self.ft == TYPE_ASCII:
             dat = AsciiDatReader()
         elif self.ft == TYPE_BINARY:
@@ -372,6 +373,32 @@ class Comtrade:
         else:
             dat = None
             raise Exception("Not supported data file format: {}".format(self.ft))
+        return dat
+
+    def read(self, cfg_lines, dat_lines):
+        self._cfg.read(cfg_lines)
+
+        # channel ids
+        self._analog_channel_ids = [channel.name for channel in self._cfg.analog_channels]
+        self._digital_channel_ids = [channel.name for channel in self._cfg.digital_channels]
+
+        dat = self._get_dat_reader()
+        dat.read(dat_lines, self._cfg)
+
+        # copy dat object information
+        self._time_values    = dat.time_values
+        self._analog_values  = dat.analog_values
+        self._digital_values = dat.digital_values
+        self._total_samples  = dat.total_samples
+
+    def load(self, cfg_filepath, dat_filepath):
+        self._cfg.load(cfg_filepath)
+
+        # channel ids
+        self._analog_channel_ids = [channel.name for channel in self._cfg.analog_channels]
+        self._digital_channel_ids = [channel.name for channel in self._cfg.digital_channels]
+
+        dat = self._get_dat_reader()
         dat.load(dat_filepath, self._cfg)
 
         # copy dat object information
@@ -379,6 +406,25 @@ class Comtrade:
         self._analog_values  = dat.analog_values
         self._digital_values = dat.digital_values
         self._total_samples  = dat.total_samples
+
+    def load_cff(self, cff_filepath):
+        with open(cff_filepath, "r") as file:
+            line_number = 0
+            for line in file:
+                if line.strip().lower() == "--- file type: cfg ---":
+                    # process CFG
+                    pass
+                if line.strip().lower() == "--- file type: inf ---":
+                    # process INF
+                    pass
+                if line.strip().lower() == "--- file type: hdr ---":
+                    # process HDR
+                    pass
+                if line.strip().lower() == "--- file type: dat ascii ---":
+                    # process ASCII DAT file
+                    pass
+
+            pass
 
     def cfg_summary(self):
         st = "Channels (total,A,D): {}A + {}D = {}\n".format(self.analog_count, self.digital_count, self.channels_count)
@@ -442,8 +488,11 @@ class AnalogChannel(Channel):
 
 
 class DatReader:
+    read_mode = "r"
+
     def __init__(self):
         self.filepath = ""
+        self._content = None
         self._cfg = None
         self.time_values = []
         self.analog_values = []
@@ -456,15 +505,23 @@ class DatReader:
 
     def load(self, dat_filepath, cfg):
         self.filepath = dat_filepath
-
+        self._content = None
         if os.path.isfile(self.filepath):
             # extract CFG file information regarding data dimensions
             self._cfg = cfg
             self._preallocate()
-            self.parse()
+            with open(self.filepath, self.read_mode) as contents:
+                self.parse(contents)
         else:
             raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), 
                 self.filepath)
+
+    def read(self, dat_lines, cfg):
+        self.filepath = None
+        self._content = dat_lines
+        self._cfg = cfg
+        self._preallocate()
+        self.parse(dat_lines)
 
     def _preallocate(self):
         # read from the cfg file the number of samples in the dat file
@@ -485,18 +542,14 @@ class DatReader:
         for i in range(digital_count):
             self.digital_values[i] = [0]   * steps
 
-    def parse(self):
+    def parse(self, contents):
         pass
 
 
 class AsciiDatReader(DatReader):
     ASCII_SEPARATOR = SEPARATOR
 
-    def parse(self):
-        with open(self.filepath, "r") as file:
-            self.parse_file(file)
-
-    def parse_file(self, file):
+    def parse(self, contents):
         analog_count  = self._cfg.analog_count
         digital_count = self._cfg.digital_count
         timemult = self._cfg.timemult
@@ -506,8 +559,14 @@ class AsciiDatReader(DatReader):
         a = [x.a for x in self._cfg.analog_channels]
         b = [x.b for x in self._cfg.analog_channels]
 
+        # extract lines
+        if type(contents) is str:
+            lines = contents.splitlines()
+        else:
+            lines = contents
+
         line_number = 0
-        for line in file:
+        for line in lines:
             line_number = line_number + 1
             if line_number <= self._total_samples:
                 values = line.strip().split(self.ASCII_SEPARATOR)
@@ -530,6 +589,9 @@ class BinaryDatReader(DatReader):
     DIGITAL_BYTES = 2
     TIME_BYTES = 4
     SAMPLE_NUMBER_BYTES = 4
+    
+    read_mode = "rb"
+
     def pad_bytes(self, val, length = 4):
         """Increases a binary-string array to "length" size."""
 
@@ -545,11 +607,7 @@ class BinaryDatReader(DatReader):
             newval.extend(bytearray(pad_with))
         return bytes(newval)
 
-    def parse(self):
-        with open(self.filepath, "rb") as file:
-            self.parse_file(file)
-
-    def parse_file(self, file):
+    def parse(self, contents):
         timemult = self._cfg.timemult
         time_base = self._cfg.time_base
         frequency = self._cfg.frequency
@@ -565,7 +623,12 @@ class BinaryDatReader(DatReader):
         dbytes = self.DIGITAL_BYTES * math.ceil(dchannels / 16.0)
         bytes_per_row = sample_id_bytes + abytes + dbytes
 
-        row = file.read(bytes_per_row)
+        if hasattr(contents, 'read'):
+            row = contents.read(bytes_per_row)
+        else:
+            offset_f = 0
+            row = contents[offset_f:offset_f + bytes_per_row]
+
         irow = 0
         while row != b'':
             # unpack row of bytes
@@ -600,7 +663,11 @@ class BinaryDatReader(DatReader):
 
                     self.digital_values[ichannel][irow] = extract
 
-            row = file.read(bytes_per_row)
+            if hasattr(contents, 'read'):
+                row = contents.read(bytes_per_row)
+            else:
+                offset_f = offset_f + bytes_per_row
+                row = contents[offset_f:offset_f + bytes_per_row]
             irow = irow + 1
 
 
