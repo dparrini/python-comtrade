@@ -294,6 +294,22 @@ class Comtrade:
         self._digital_values = []
 
     @property
+    def station_name(self):
+        return self._cfg._station_name
+    
+    @property
+    def rec_dev_id(self):
+        return self._cfg._rec_dev_id
+
+    @property
+    def rev_year(self):
+        return self._cfg._rev_year
+
+    @property
+    def cfg(self):
+        return self._cfg
+
+    @property
     def analog_channel_ids(self):
         return self._analog_channel_ids
     

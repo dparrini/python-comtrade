@@ -31,7 +31,15 @@ plt.legend([rec.analog_channel_ids[0], rec.analog_channel_ids[1]])
 plt.show()
 ```
 
+A `Comtrade` class must be instantiated and the method `load` called with the `CFF` file path.
+
+`Comtrade.analog` and `Comtrade.digital` lists stores analog and digital channel sample lists respectively. These can be accessed through zero-based indexes, i.e., `Comtrade.analog[0]`. The list `Comtrade.time` stores each sample time in seconds.
+
+More information can be accessed through `Comtrade.cfg` object, which stores data such as detailed channel information.
+
 ### CFG and DAT files (all revisions)
+
+Comtrade files separated in CFG and DAT formats can also be read with `Comtrade.load`. A `CFG` file path must be passed as an argument and, optionaly, a `DAT` file path too (if the file name is not equal of the CFG file).
 
 ```py
 import matplotlib.pyplot as plt
