@@ -33,6 +33,12 @@ re_dt = re.compile("([0-9]{1,2})/([0-9]{1,2})/([0-9]{4}),([0-9]{2}):([0-9]{2}):(
 def _read_sep_values(line):
     return line.strip().split(SEPARATOR)
 
+def _prevent_null(str_value, type, default_value):
+        if len(str_value.strip()) == 0:
+            return default_value
+        else:
+            return type(str_value)
+
 def _read_timestamp(tstamp):
     m = re_dt.match(tstamp)
     day = int(m.group(1))
@@ -51,6 +57,7 @@ def _read_timestamp(tstamp):
 
     return dt.datetime(year, month, day, hour, minute, second, 
                        microsecond, tzinfo)
+
 
 class Cfg:
     # time base units
@@ -210,10 +217,10 @@ class Cfg:
                     # type conversion
                     n = int(n)
                     a = float(a)
-                    b = float(b)
-                    skew = float(skew)
-                    cmin = int(cmin)
-                    cmax = int(cmax)
+                    b = _prevent_null(b, float, 0.0)
+                    skew = _prevent_null(skew, float, 0.0)
+                    cmin = float(cmin)
+                    cmax = float(cmax)
                     primary = float(primary)
                     secondary = float(secondary)
                     self.analog_channels[iachn] = AnalogChannel(n, a, b, skew, 
