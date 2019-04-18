@@ -377,17 +377,19 @@ class Comtrade:
         pass
 
     def _get_dat_reader(self):
+        # case insensitive comparison of file format
         dat = None
-        if self.ft == TYPE_ASCII:
+        ft_upper = self.ft.upper()
+        if ft_upper == TYPE_ASCII:
             dat = AsciiDatReader()
-        elif self.ft == TYPE_BINARY:
+        elif ft_upper == TYPE_BINARY:
             dat = BinaryDatReader()
-        elif self.ft == TYPE_BINARY32:
+        elif ft_upper == TYPE_BINARY32:
             # not tested
             warnings.warn(FutureWarning("Experimental Binary32 reading"))
             dat = Binary32DatReader()
             # raise Exception("Binary32 format unsupported")
-        elif self.ft == TYPE_FLOAT32:
+        elif ft_upper == TYPE_FLOAT32:
             dat = None
             raise Exception("Float32 format unsupported")
         else:
