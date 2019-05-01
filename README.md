@@ -64,27 +64,37 @@ Feel free to pull requests implementing one of these unsupported features or fix
 
 | Formats                                               | 1991 |  1999 | 2013 | Module Support  |
 |:------------------------------------------------------|:----:|:-----:|:----:|:---------------:|
-| CFG file format                                       | x    | x     | x    | x               |
-| DAT file format                                       | x    | x     | x    | x               |
-| HDR file format                                       | x    | x     | x    |                 |
-| INF file format                                       |      | x     | x    |                 |
-| CFF file format                                       |      |       | x    | x               |
-| ASCII data file format                                | x    | x     | x    | x               |
-| Binary data file format                               | x    | x     | x    | x               |
-| Binary32 data file format                             |      |       | x    | Untested        |
-| Float32 data file format                              |      |       | x    |                 |
-| Schema for phasor data                                |      |       | x    |                 |
+| CFG file format                                       | x    | x     | x    | ✔              |
+| DAT file format                                       | x    | x     | x    | ✔              |
+| HDR file format                                       | x    | x     | x    | ❌              |
+| INF file format                                       |      | x     | x    | ❌              |
+| CFF file format                                       |      |       | x    | ✔              |
+| ASCII data file format                                | x    | x     | x    | ✔              |
+| Binary data file format                               | x    | x     | x    | ✔              |
+| Binary32 data file format                             |      |       | x    | ✔              |
+| Float32 data file format                              |      |       | x    | ✔              |
+| Schema for phasor data                                |      |       | x    | ❌              |
 
 
 | Features                                              | 1991 |  1999 | 2013 | Module Support  |
 |:------------------------------------------------------|:----:|:-----:|:----:|:---------------:|
-| COMTRADE standard revision                            |      | x     | x    | x               |
-| Timestamp multiplication factor                       |      | x     | x    | x               |
-| Time code and local code                              |      |       | x    | x               |
-| Time quality of the samples                           |      |       | x    | x               |
+| COMTRADE standard revision                            |      | x     | x    | ✔              |
+| Timestamp multiplication factor                       |      | x     | x    | ✔              |
+| Time code and local code                              |      |       | x    | ✔              |
+| Time quality of the samples                           |      |       | x    | ✔              |
 | Analog channel time skew                              |      | x     | x    | Partial         |
-| Analog channel primary and secondary VT or CT ratio   |      | x     | x    | x               |
-| Digital channel phase and monitored circuit           |      | x     | x    | x               |
+| Analog channel primary and secondary VT or CT ratio   |      | x     | x    | ✔              |
+| Digital channel phase and monitored circuit           |      | x     | x    | ✔              |
+| Multiple sample rates                                 | x    | x     | x    | Partial         |
+| Nanoseconds scale                                     |      |       | x    | ✔              |
+
+
+### Unsupported features
+
+* Nanoseconds time base within Python's `datetime` objects (such as `start_timestamp` and `trigger_timestamp` properties). It warns the user but doesn't use it, truncating the numbers.
+* Use of multiple sample rates in time calculations for binary data.
+* Null fields in ASCII data (blank columns).
+* Missing data fields in binary data (`0xFFFF...`) are treated as any other value.
 
 
 ## Documentation

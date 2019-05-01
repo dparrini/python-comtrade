@@ -6,8 +6,8 @@ import math
 import os
 import re
 import struct
+import sys
 import warnings
-import matplotlib.pyplot as plt
 
 # COMTRADE standard revisions
 REV_1991 = "1991"
@@ -20,6 +20,9 @@ TYPE_BINARY = "BINARY"
 TYPE_BINARY32 = "BINARY32"
 TYPE_FLOAT32 = "FLOAT32"
 
+# Special values
+TIMESTAMP_MISSING = 0xFFFFFFFF
+
 # CFF headers
 CFF_HEADER_REXP = "(?i)--- file type: ([a-z]+)(?:\\s([a-z]+))? ---$"
 
@@ -29,15 +32,23 @@ SEPARATOR = ","
 # timestamp regular expression
 re_dt = re.compile("([0-9]{1,2})/([0-9]{1,2})/([0-9]{4}),([0-9]{2}):([0-9]{2}):([0-9]{2})\\.([0-9]{5,12})")
 
+# Non-standard revision warning
+WARNING_UNKNOWN_REVISION = "Unknown standard revision \"{}\""
+# Date time with nanoseconds resolution warning
+WARNING_DATETIME_NANO = "Unsupported datetime objects with nanoseconds \
+resolution. Using truncated values."
+
 
 def _read_sep_values(line):
     return line.strip().split(SEPARATOR)
+
 
 def _prevent_null(str_value, type, default_value):
         if len(str_value.strip()) == 0:
             return default_value
         else:
             return type(str_value)
+
 
 def _read_timestamp(tstamp):
     m = re_dt.match(tstamp)
@@ -47,13 +58,17 @@ def _read_timestamp(tstamp):
     hour = int(m.group(4))
     minute = int(m.group(5))
     second = int(m.group(6))
-    microsecond = int(m.group(7))
-    nanosseconds = (microsecond >= 1E7)
+    frac_second = int(m.group(7))
+    in_nanoseconds = len(m.group(7)) > 6
 
     # timezone information
     tzinfo = None
-    if nanosseconds:
-        microsecond = microsecond * 1E-3
+    microsecond = frac_second
+    if in_nanoseconds:
+        # Nanoseconds resolution is not supported by datetime module, so it's
+        # converted to integer below.
+        warnings.warn(Warning(WARNING_DATETIME_NANO))
+        microsecond = int(microsecond * 1E-3)
 
     return dt.datetime(year, month, day, hour, minute, second, 
                        microsecond, tzinfo)
@@ -61,13 +76,13 @@ def _read_timestamp(tstamp):
 
 class Cfg:
     # time base units
-    TIME_BASE_NS = 1E-9
-    TIME_BASE_US = 1E-6
+    TIME_BASE_NANOSEC = 1E-9
+    TIME_BASE_MICROSEC = 1E-6
 
     def __init__(self):
         self.filename = ""
         # implicit data
-        self._time_base = self.TIME_BASE_US
+        self._time_base = self.TIME_BASE_MICROSEC
 
         # Default CFG data
         self._station_name = ""
@@ -190,7 +205,8 @@ class Cfg:
                     self._rev_year = self._rev_year.strip()
 
                     if self._rev_year not in (REV_1991, REV_1999, REV_2013):
-                        warnings.warn(Warning("Unknown standard revision \"{}\"".format(self._rev_year)))
+                        msg = WARNING_UNKNOWN_REVISION.format(self._rev_year)
+                        warnings.warn(Warning(msg))
                 else:
                     self._station_name, self._rec_dev_id = packed
                     self._rev_year = REV_1999
@@ -253,11 +269,19 @@ class Cfg:
                 self.sample_rates.append([samp, endsamp])
 
             if line_count == 4 + self._channels_count + self._nrates:
-                # first data point
-                self._start_timestamp = _read_timestamp(line.strip())
+                # first data point and time base
+                ts_str = line.strip()
+                self._start_timestamp = _read_timestamp(ts_str)
+                self._time_base = self._get_time_base(ts_str)
+
             if line_count == 5 + self._channels_count + self._nrates:
-                # last data point
-                self._trigger_timestamp = _read_timestamp(line.strip())
+                # event data point and time base
+                ts_str = line.strip()
+                self._trigger_timestamp = _read_timestamp(ts_str)
+
+                self._time_base = min([self.time_base, 
+                    self._get_time_base(ts_str)])
+
             if line_count == 6 + self._channels_count + self._nrates:
                 # file type
                 self._ft = line.strip()
@@ -276,6 +300,17 @@ class Cfg:
                     self._tmq_code, self._leapsec = _read_sep_values(line)
 
             line_count = line_count + 1
+
+    def _get_time_base(self, timestamp):
+        # Return the time base based on the fractionary part of the seconds
+        # in a timestamp (00.XXXXX).
+        match = re_dt.match(timestamp)
+        in_nanoseconds = len(match.group(7)) > 6
+        if in_nanoseconds:
+            return self.TIME_BASE_NANOSEC
+        else:
+            return self.TIME_BASE_MICROSEC
+
 
 
 class Comtrade:
@@ -374,6 +409,10 @@ class Comtrade:
         return tsec
 
     @property
+    def time_base(self):
+        return self._cfg.time_base
+
+    @property
     def ft(self):
         return self._cfg.ft
     
@@ -392,13 +431,9 @@ class Comtrade:
         elif ft_upper == TYPE_BINARY:
             dat = BinaryDatReader()
         elif ft_upper == TYPE_BINARY32:
-            # not tested
-            warnings.warn(FutureWarning("Experimental Binary32 reading"))
             dat = Binary32DatReader()
-            # raise Exception("Binary32 format unsupported")
         elif ft_upper == TYPE_FLOAT32:
-            dat = None
-            raise Exception("Float32 format unsupported")
+            dat = Float32DatReader()
         else:
             dat = None
             raise Exception("Not supported data file format: {}".format(self.ft))
@@ -433,9 +468,6 @@ class Comtrade:
             # if not informed, infer dat_file with cfg_file
             if dat_file is None:
                 dat_file = cfg_file[:-3] + "DAT"
-                # print("loading DAT:", dat_file)
-
-            # check if both files exists
 
             # load both
             self._load_cfg_dat(cfg_file, dat_file)
@@ -619,6 +651,8 @@ class DatReader:
 class AsciiDatReader(DatReader):
     ASCII_SEPARATOR = SEPARATOR
 
+    DATA_MISSING = ""
+
     def parse(self, contents):
         analog_count  = self._cfg.analog_count
         digital_count = self._cfg.digital_count
@@ -659,23 +693,31 @@ class BinaryDatReader(DatReader):
     DIGITAL_BYTES = 2
     TIME_BYTES = 4
     SAMPLE_NUMBER_BYTES = 4
-    
+
+    # maximum negative value
+    DATA_MISSING = 0xFFFF
+
     read_mode = "rb"
 
-    def pad_bytes(self, val, length = 4):
-        """Increases a binary-string array to "length" size."""
+    STRUCT_FORMAT = "LL {acount:d}h {dcount:d}H"
+    STRUCT_FORMAT_ANALOG_ONLY = "LL {acount:d}h"
+    STRUCT_FORMAT_DIGITAL_ONLY = "LL {dcount:d}H"
 
-        # extract sign
-        sign = (val[1] & int('0b10000000', 2)) >> 7
-        if sign > 0:
-            pad_with = b'\xFF'
+    def get_reader_format(self, analog_channels, digital_bytes):
+        # Number of digital fields of 2 bytes based on the total number of 
+        # bytes.
+        dcount = math.floor(digital_bytes / 2)
+        
+        # Check the file configuration
+        if int(digital_bytes) > 0 and int(analog_channels) > 0:
+            return self.STRUCT_FORMAT.format(acount=analog_channels, 
+                dcount=dcount)
+        elif int(analog_channels) > 0:
+            # Analog channels only.
+            return self.STRUCT_FORMAT_ANALOG_ONLY.format(acount=analog_channels)
         else:
-            pad_with = b'\x00'
-
-        newval = bytearray(val)
-        for i in range(length - len(val)):
-            newval.extend(bytearray(pad_with))
-        return bytes(newval)
+            # Digital channels only.
+            return self.STRUCT_FORMAT_DIGITAL_ONLY.format(acount=dcount)
 
     def parse(self, contents):
         timemult = self._cfg.timemult
@@ -692,57 +734,86 @@ class BinaryDatReader(DatReader):
         abytes = achannels*self.ANALOG_BYTES
         dbytes = self.DIGITAL_BYTES * math.ceil(dchannels / 16.0)
         bytes_per_row = sample_id_bytes + abytes + dbytes
+        groups_of_16bits = math.floor(dbytes / self.DIGITAL_BYTES)
+        period = 1 / frequency
 
+        # Struct format.
+        rowreader = struct.Struct(self.get_reader_format(achannels, dbytes))
+
+        # Row reading function.
+        nextrow = None
         if hasattr(contents, 'read'):
-            row = contents.read(bytes_per_row)
+            # It's an IO buffer.
+            nextrow = lambda offset: contents.read(bytes_per_row)
         else:
-            offset_f = 0
-            row = contents[offset_f:offset_f + bytes_per_row]
+            # It's an array.
+            nextrow = lambda offset: contents[offset:offset + bytes_per_row]
+
+        # Get next row.
+        buffer_offset = 0
+        row = nextrow(buffer_offset)
 
         irow = 0
         while row != b'':
-            # unpack row of bytes
-            nbyte  = row[0:4]
-            n  = struct.unpack('i', nbyte)[0]
-            tsbyte = row[4:8]
-            ts = struct.unpack('i', tsbyte)[0]
-            # time
-            t = (n - 1) / frequency
+            values = rowreader.unpack(row)
+            # Sample number
+            n = values[0]
+            # Calculated time
+            # TODO: add support for multiple sampling rates
+            t = (n - 1) * period
 
+            # Read time
+            ts_val = values[1]
+            if ts_val != TIMESTAMP_MISSING:
+                ts = values[1] * time_base * timemult
+            else:
+                # if the timestamp is missing, use calculated.
+                ts = t
+
+            # Using calculated timestamp, ignoring file timestamp.
+            # TODO: add option to enforce dat file timestamp, when available
             self.time[irow] = t
-            # extract channel values
-            offset_start = sample_id_bytes
+
+            # Extract analog channel values.
             for ichannel in range(achannels):
-                offset = ichannel * self.ANALOG_BYTES + offset_start
-                ybyte = row[offset:offset + self.ANALOG_BYTES]
-                yint = struct.unpack('i', self.pad_bytes(ybyte))[0]
+                yint = values[ichannel + 2]
                 y = a[ichannel] * yint + b[ichannel]
                 self.analog[ichannel][irow] = y
 
-            offset_start = sample_id_bytes + abytes
-            groups_of_16bits = math.floor(dbytes / self.DIGITAL_BYTES)
+            # Extract digital channel values.
             for igroup in range(groups_of_16bits):
-                offset = igroup * self.DIGITAL_BYTES + offset_start
-                group = row[offset:offset + self.DIGITAL_BYTES]
-                group = struct.unpack('i', self.pad_bytes(group))[0]
+                group = values[achannels + 2 + igroup]
+
                 # for each group of 16 bits, extract the digital channels
-                for ichannel in range(igroup * 16, (igroup+1) * 16):
+                maxchn = min([ (igroup+1) * 16, dchannels])
+                for ichannel in range(igroup * 16, maxchn):
                     chnindex = ichannel - igroup*16
                     mask = int('0b01', 2) << chnindex
                     extract = (group & mask) >> chnindex
 
                     self.digital[ichannel][irow] = extract
 
-            if hasattr(contents, 'read'):
-                row = contents.read(bytes_per_row)
-            else:
-                offset_f = offset_f + bytes_per_row
-                row = contents[offset_f:offset_f + bytes_per_row]
-            irow = irow + 1
+            # Get the next row
+            irow += 1
+            buffer_offset += bytes_per_row
+            row = nextrow(buffer_offset)
 
 
 class Binary32DatReader(BinaryDatReader):
     ANALOG_BYTES = 4
 
+    STRUCT_FORMAT = "LL {acount:d}l {dcount:d}H"
+    STRUCT_FORMAT_ANALOG_ONLY = "LL {acount:d}l"
+
+    # maximum negative value
+    DATA_MISSING = 0xFFFFFFFF
 
 
+class Float32DatReader(BinaryDatReader):
+    ANALOG_BYTES = 4
+
+    STRUCT_FORMAT = "LL {acount:d}f {dcount:d}H"
+    STRUCT_FORMAT_ANALOG_ONLY = "LL {acount:d}f"
+
+    # Maximum negative value
+    DATA_MISSING = sys.float_info.min
