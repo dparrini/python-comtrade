@@ -58,7 +58,7 @@ class TestCfg1Reading(unittest.TestCase):
         self.assertEqual(self.comtrade.analog_count, 1)
 
     def test_1d(self):
-        self.assertEqual(self.comtrade.digital_count, 1)
+        self.assertEqual(self.comtrade.status_count, 1)
 
     def test_2c(self):
         self.assertEqual(self.comtrade.channels_count, 2)
@@ -103,7 +103,7 @@ class TestCffReading(unittest.TestCase):
         self.assertEqual(self.comtrade.analog_count, 4)
 
     def test_1d(self):
-        self.assertEqual(self.comtrade.digital_count, 4)
+        self.assertEqual(self.comtrade.status_count, 4)
 
     def test_2c(self):
         self.assertEqual(self.comtrade.channels_count, 8)
@@ -156,18 +156,18 @@ class TestBinaryReading(unittest.TestCase):
         # Struct object to write data.
         datawriter = struct.Struct(self.getFormat())
 
-        # Create temporary binary dat file, with one analog and one digital
+        # Create temporary binary dat file, with one analog and one status
         # channel.
         maxtime = 2.0
         analog = lambda t : math.cos(2*math.pi*60*t)*100
-        digital = lambda t : t > maxtime/2.0 and 1 or 0
+        status = lambda t : t > maxtime/2.0 and 1 or 0
         with open("sample_files/{}.dat".format(self.filename), 'wb') as file:
             for isample in range(0, self.samples):
                 t = isample * sample_freq
                 t_us = t * timebase * timemult
                 y_analog = self.parseAnalog(analog(t))
-                y_digital = digital(t)
-                file.write(datawriter.pack(isample +1, t_us, y_analog, y_digital))
+                y_status = status(t)
+                file.write(datawriter.pack(isample +1, t_us, y_analog, y_status))
 
         # Load file.
         # start = time.time()
@@ -183,23 +183,23 @@ class TestBinaryReading(unittest.TestCase):
     def test_total_samples(self):
         self.assertEqual(self.comtrade.total_samples,   self.samples)
         self.assertEqual(len(self.comtrade.analog[0]),  self.samples)
-        self.assertEqual(len(self.comtrade.digital[0]), self.samples)
+        self.assertEqual(len(self.comtrade.status[0]), self.samples)
         self.assertEqual(len(self.comtrade.time),       self.samples)
 
     def test_analog_channels(self):
         self.assertEqual(self.comtrade.analog_count, 1)
         self.assertEqual(len(self.comtrade.analog), 1)
 
-    def test_digital_channels(self):
-        self.assertEqual(self.comtrade.digital_count, 1)
-        self.assertEqual(len(self.comtrade.digital), 1)
+    def test_status_channels(self):
+        self.assertEqual(self.comtrade.status_count, 1)
+        self.assertEqual(len(self.comtrade.status), 1)
 
     def test_max_analog_value(self):
         tolerance = 2
         self.assertLessEqual(100 - max(self.comtrade.analog[0]), 2)
 
-    def test_last_digital_value(self):
-        self.assertEqual(self.comtrade.digital[0][-1], 1)
+    def test_last_status_value(self):
+        self.assertEqual(self.comtrade.status[0][-1], 1)
 
     def test_timestamps(self):
         self.assertEqual(self.comtrade.start_timestamp, 

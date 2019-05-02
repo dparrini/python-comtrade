@@ -90,9 +90,9 @@ class Cfg:
         self._rev_year = 2013
         self._channels_count = 0
         self._analog_channels = []
-        self._digital_channels = []
+        self._status_channels = []
         self._analog_count = 0
-        self._digital_count = 0
+        self._status_count = 0
         self._frequency = 60.0
         self._nrates = 1
         self._sample_rates = []
@@ -128,18 +128,18 @@ class Cfg:
     @property
     def analog_channels(self):
         return self._analog_channels
-    
+
     @property
-    def digital_channels(self):
-        return self._digital_channels
+    def status_channels(self):
+        return self._status_channels
     
     @property
     def analog_count(self):
         return self._analog_count
     
     @property
-    def digital_count(self):
-        return self._digital_count
+    def status_count(self):
+        return self._status_count
     
     @property
     def time_base(self):
@@ -173,6 +173,17 @@ class Cfg:
     def sample_rates(self):
         return self._sample_rates
 
+    # Deprecated properties - Changed "Digital" for "Status"
+    @property
+    def digital_channels(self):
+        warnings.warn(FutureWarning("digital_channels is deprecated, use status_channels instead."))
+        return self._status_channels
+
+    @property
+    def digital_count(self):
+        warnings.warn(FutureWarning("digital_count is deprecated, use status_channels instead."))
+        return self._status_count
+
     def load(self, filepath):
         self.filepath = filepath
 
@@ -194,7 +205,7 @@ class Cfg:
         self._nrates = 1
         self._sample_rates = []
         self._analog_channels = []
-        self._digital_channels = []
+        self._status_channels = []
         for line in cfg:
             if 0 == line_count:
                 # station, device, and comtrade standard revision information
@@ -216,15 +227,15 @@ class Cfg:
                 totchn, achn, dchn = _read_sep_values(line)
                 self._channels_count = int(totchn)
                 self._analog_count   = int(achn[:-1])
-                self._digital_count  = int(dchn[:-1])
+                self._status_count  = int(dchn[:-1])
                 self._analog_channels = [None]*self._analog_count
-                self._digital_channels = [None]*self._digital_count
+                self._status_channels = [None]*self._status_count
             if 1 < line_count and line_count <= 1 + self._channels_count:
                 # channel information
                 # channel index
                 ichn = line_count - 2
                 packed = _read_sep_values(line)
-                # analog or digital channel?
+                # analog or status channel?
                 if ichn < self._analog_count:
                     # analog channel index
                     iachn = ichn
@@ -242,14 +253,14 @@ class Cfg:
                     self.analog_channels[iachn] = AnalogChannel(n, a, b, skew, 
                         cmin, cmax, name, uu, ph, ccbm, primary, secondary, pors)
                 else:
-                    # digital channel index
+                    # status channel index
                     idchn = ichn - self._analog_count
                     # unpack values
                     n, name, ph, ccbm, y = packed
                     # type conversion
                     n = int(n)
                     y = int(y)
-                    self.digital_channels[idchn] = DigitalChannel(n, name, ph, ccbm, y)
+                    self.status_channels[idchn] = StatusChannel(n, name, ph, ccbm, y)
 
             if line_count == 2 + self._channels_count:
                 self._frequency = float(line.strip())
@@ -311,8 +322,6 @@ class Cfg:
         else:
             return self.TIME_BASE_MICROSEC
 
-
-
 class Comtrade:
     # extensions
     EXT_CFG = "cfg"
@@ -327,13 +336,13 @@ class Comtrade:
 
         # Default CFG data
         self._analog_channel_ids = []
-        self._digital_channel_ids = []
+        self._status_channel_ids = []
         self._timestamp_critical = False
 
         # DAT file data
         self._time_values = []
         self._analog_values = []
-        self._digital_values = []
+        self._status_values = []
 
     @property
     def station_name(self):
@@ -356,8 +365,8 @@ class Comtrade:
         return self._analog_channel_ids
     
     @property
-    def digital_channel_ids(self):
-        return self._digital_channel_ids
+    def status_channel_ids(self):
+        return self._status_channel_ids
 
     @property
     def time(self):
@@ -368,8 +377,8 @@ class Comtrade:
         return self._analog_values
     
     @property
-    def digital(self):
-        return self._digital_values
+    def status(self):
+        return self._status_values
 
     @property
     def total_samples(self):
@@ -394,10 +403,10 @@ class Comtrade:
     @property
     def analog_count(self):
         return self._cfg.analog_count
-    
+
     @property
-    def digital_count(self):
-        return self._cfg.digital_count
+    def status_count(self):
+        return self._cfg.status_count
 
     @property
     def trigger_time(self):
@@ -415,6 +424,22 @@ class Comtrade:
     @property
     def ft(self):
         return self._cfg.ft
+
+    # Deprecated properties - Changed "Digital" for "Status"
+    @property
+    def digital_channel_ids(self):
+        warnings.warn(FutureWarning("digital_channel_ids is deprecated, use status_channel_ids instead."))
+        return self._status_channel_ids
+
+    @property
+    def digital(self):
+        warnings.warn(FutureWarning("digital is deprecated, use status instead."))
+        return self._status_values
+
+    @property
+    def digital_count(self):
+        warnings.warn(FutureWarning("digital_count is deprecated, use status_count instead."))
+        return self._cfg.status_count
     
     def __str__(self):
         pass
@@ -453,12 +478,12 @@ class Comtrade:
 
     def _cfg_extract_channels_ids(self, cfg):
         self._analog_channel_ids = [channel.name for channel in cfg.analog_channels]
-        self._digital_channel_ids = [channel.name for channel in cfg.digital_channels]
+        self._status_channel_ids = [channel.name for channel in cfg.status_channels]
 
     def _dat_extract_data(self, dat):
         self._time_values    = dat.time
         self._analog_values  = dat.analog
-        self._digital_values = dat.digital
+        self._status_values = dat.status
         self._total_samples  = dat.total_samples
 
     def load(self, cfg_file, dat_file = None):
@@ -529,7 +554,7 @@ class Comtrade:
 
 
     def cfg_summary(self):
-        st = "Channels (total,A,D): {}A + {}D = {}\n".format(self.analog_count, self.digital_count, self.channels_count)
+        st = "Channels (total,A,D): {}A + {}D = {}\n".format(self.analog_count, self.status_count, self.channels_count)
         st = st + "Line frequency: {} Hz\n".format(self.frequency)
         for i in range(self._cfg.nrates):
             rate, points = self._cfg.sample_rates[i]
@@ -550,7 +575,7 @@ class Channel:
         return ','.join([str(self.n), self.name, self.ph, self.ccbm])
 
 
-class DigitalChannel(Channel):
+class StatusChannel(Channel):
     def __init__(self, n, name='', ph='', ccbm='', y=''):
         self.name = name
         self.n = n
@@ -598,7 +623,7 @@ class DatReader:
         self._cfg = None
         self.time = []
         self.analog = []
-        self.digital = []
+        self.status = []
         self._total_samples = 0
 
     @property
@@ -630,19 +655,19 @@ class DatReader:
         steps = self._cfg.sample_rates[-1][1] # last samp field
         self._total_samples = steps
 
-        # analog and digital count
+        # analog and status count
         analog_count = self._cfg.analog_count
-        digital_count = self._cfg.digital_count
+        status_count = self._cfg.status_count
 
-        # preallocate analog and digital values
+        # preallocate analog and status values
         self.time = [0.0] * steps
         self.analog  = [None] * analog_count
-        self.digital = [None] * digital_count
+        self.status = [None] * status_count
         # preallocate each channel values with zeros
         for i in range(analog_count):
             self.analog[i]  = [0.0] * steps
-        for i in range(digital_count):
-            self.digital[i] = [0]   * steps
+        for i in range(status_count):
+            self.status[i] = [0]   * steps
 
     def parse(self, contents):
         pass
@@ -655,7 +680,7 @@ class AsciiDatReader(DatReader):
 
     def parse(self, contents):
         analog_count  = self._cfg.analog_count
-        digital_count = self._cfg.digital_count
+        status_count = self._cfg.status_count
         timemult = self._cfg.timemult
         time_base = self._cfg.time_base
 
@@ -678,19 +703,19 @@ class AsciiDatReader(DatReader):
                 n = values[0]
                 t = float(values[1]) * time_base * timemult
                 avalues = [float(x)*a[i] + b[i] for i, x in enumerate(values[2:analog_count+2])]
-                dvalues = [int(x) for x in values[analog_count+2:]]
+                svalues = [int(x) for x in values[status_count+2:]]
 
                 # store
                 self.time[line_number-1] = t
                 for i in range(analog_count):
                     self.analog[i][line_number - 1]  = avalues[i]
-                for i in range(digital_count):
-                    self.digital[i][line_number - 1] = dvalues[i]
+                for i in range(status_count):
+                    self.status[i][line_number - 1] = svalues[i]
 
 
 class BinaryDatReader(DatReader):
     ANALOG_BYTES = 2
-    DIGITAL_BYTES = 2
+    STATUS_BYTES = 2
     TIME_BYTES = 4
     SAMPLE_NUMBER_BYTES = 4
 
@@ -701,30 +726,30 @@ class BinaryDatReader(DatReader):
 
     STRUCT_FORMAT = "LL {acount:d}h {dcount:d}H"
     STRUCT_FORMAT_ANALOG_ONLY = "LL {acount:d}h"
-    STRUCT_FORMAT_DIGITAL_ONLY = "LL {dcount:d}H"
+    STRUCT_FORMAT_STATUS_ONLY = "LL {dcount:d}H"
 
-    def get_reader_format(self, analog_channels, digital_bytes):
-        # Number of digital fields of 2 bytes based on the total number of 
+    def get_reader_format(self, analog_channels, status_bytes):
+        # Number of status fields of 2 bytes based on the total number of 
         # bytes.
-        dcount = math.floor(digital_bytes / 2)
+        dcount = math.floor(status_bytes / 2)
         
         # Check the file configuration
-        if int(digital_bytes) > 0 and int(analog_channels) > 0:
+        if int(status_bytes) > 0 and int(analog_channels) > 0:
             return self.STRUCT_FORMAT.format(acount=analog_channels, 
                 dcount=dcount)
         elif int(analog_channels) > 0:
             # Analog channels only.
             return self.STRUCT_FORMAT_ANALOG_ONLY.format(acount=analog_channels)
         else:
-            # Digital channels only.
-            return self.STRUCT_FORMAT_DIGITAL_ONLY.format(acount=dcount)
+            # Status channels only.
+            return self.STRUCT_FORMAT_STATUS_ONLY.format(acount=dcount)
 
     def parse(self, contents):
         timemult = self._cfg.timemult
         time_base = self._cfg.time_base
         frequency = self._cfg.frequency
         achannels = self._cfg.analog_count
-        dchannels = self._cfg.digital_count
+        dchannels = self._cfg.status_count
 
         # auxillary vectors (channels gains and offsets)
         a = [x.a for x in self._cfg.analog_channels]
@@ -732,9 +757,9 @@ class BinaryDatReader(DatReader):
 
         sample_id_bytes = self.SAMPLE_NUMBER_BYTES + self.TIME_BYTES
         abytes = achannels*self.ANALOG_BYTES
-        dbytes = self.DIGITAL_BYTES * math.ceil(dchannels / 16.0)
+        dbytes = self.STATUS_BYTES * math.ceil(dchannels / 16.0)
         bytes_per_row = sample_id_bytes + abytes + dbytes
-        groups_of_16bits = math.floor(dbytes / self.DIGITAL_BYTES)
+        groups_of_16bits = math.floor(dbytes / self.STATUS_BYTES)
         period = 1 / frequency
 
         # Struct format.
@@ -780,18 +805,18 @@ class BinaryDatReader(DatReader):
                 y = a[ichannel] * yint + b[ichannel]
                 self.analog[ichannel][irow] = y
 
-            # Extract digital channel values.
+            # Extract status channel values.
             for igroup in range(groups_of_16bits):
                 group = values[achannels + 2 + igroup]
 
-                # for each group of 16 bits, extract the digital channels
+                # for each group of 16 bits, extract the status channels
                 maxchn = min([ (igroup+1) * 16, dchannels])
                 for ichannel in range(igroup * 16, maxchn):
                     chnindex = ichannel - igroup*16
                     mask = int('0b01', 2) << chnindex
                     extract = (group & mask) >> chnindex
 
-                    self.digital[ichannel][irow] = extract
+                    self.status[ichannel][irow] = extract
 
             # Get the next row
             irow += 1
