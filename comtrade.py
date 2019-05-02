@@ -344,6 +344,10 @@ class Comtrade:
         self._analog_values = []
         self._status_values = []
 
+        # Additional CFF data (or additional comtrade files)
+        self._hdr = None
+        self._inf = None
+
     @property
     def station_name(self):
         return self._cfg._station_name
@@ -359,6 +363,14 @@ class Comtrade:
     @property
     def cfg(self):
         return self._cfg
+
+    @property
+    def hdr(self):
+        return self._hdr
+    
+    @property
+    def inf(self):
+        return self._inf
 
     @property
     def analog_channel_ids(self):
@@ -551,6 +563,15 @@ class Comtrade:
         
         # process CFF data
         self.read(cfg_lines, dat_lines)
+
+        # stores additional data
+        self._hdr = "\n".join(hdr_lines)
+        if len(self._hdr) == 0:
+            self._hdr = None
+
+        self._inf = "\n".join(inf_lines)
+        if len(self._inf) == 0:
+            self._inf = None
 
 
     def cfg_summary(self):

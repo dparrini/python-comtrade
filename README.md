@@ -37,6 +37,9 @@ A `Comtrade` class must be instantiated and the method `load` called with the `C
 
 More information can be accessed through `Comtrade.cfg` object, which stores data such as detailed channel information.
 
+Data of additional sections, such as HDR and INF, can be accessed through `hdr` and `inf` properties, respectively.
+
+
 ### CFG and DAT files (all revisions)
 
 Comtrade files separated in CFG and DAT formats can also be read with `Comtrade.load`. A `CFG` file path must be passed as an argument and, optionaly, a `DAT` file path too (if the file name is not equal of the CFG file).
@@ -55,6 +58,9 @@ plt.plot(rec.time, rec.analog[1])
 plt.legend([rec.analog_channel_ids[0], rec.analog_channel_ids[1]])
 plt.show()
 ```
+
+Additional header (`*.hdr`) and information (`*.inf`) files are not supported.
+
 
 ## Features
 

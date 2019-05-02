@@ -121,6 +121,13 @@ class TestCffReading(unittest.TestCase):
     def test_ft(self):
         self.assertEqual(self.comtrade.ft, "ASCII")
 
+    def test_hdr(self):
+        self.assertIsNone(self.comtrade.hdr, '')
+
+    def test_inf(self):
+        self.assertIsNone(self.comtrade.inf)
+        # self.assertIsNone(self.comtrade.inf)
+
 
 class TestCfg2Reading(TestCffReading):
     """CFG and DAT 2013 file pair test case (same content as the CFF test).
