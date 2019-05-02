@@ -83,7 +83,6 @@ class TestCfg1Reading(unittest.TestCase):
     def test_ft(self):
         self.assertEqual(self.comtrade.ft, "ASCII")
 
-
 class TestCffReading(unittest.TestCase):
     """CFF 2013 file test case."""
     def setUp(self):
@@ -122,11 +121,10 @@ class TestCffReading(unittest.TestCase):
         self.assertEqual(self.comtrade.ft, "ASCII")
 
     def test_hdr(self):
-        self.assertIsNone(self.comtrade.hdr, '')
+        self.assertIsNone(self.comtrade.hdr)
 
     def test_inf(self):
         self.assertIsNone(self.comtrade.inf)
-        # self.assertIsNone(self.comtrade.inf)
 
 
 class TestCfg2Reading(TestCffReading):
@@ -135,6 +133,12 @@ class TestCfg2Reading(TestCffReading):
     def setUp(self):
         self.comtrade = Comtrade()
         self.comtrade.load("sample_files/sample_ascii.cfg")
+
+    def test_hdr(self):
+        self.assertIsNone(self.comtrade.hdr)
+
+    def test_inf(self):
+        self.assertIsNone(self.comtrade.inf)
 
 
 class TestBinaryReading(unittest.TestCase):

@@ -326,6 +326,8 @@ class Comtrade:
     # extensions
     EXT_CFG = "cfg"
     EXT_DAT = "dat"
+    EXT_INF = "inf"
+    EXT_HDR = "hdr"
     # format specific
     ASCII_SEPARATOR = ","
     
@@ -498,16 +500,30 @@ class Comtrade:
         self._status_values = dat.status
         self._total_samples  = dat.total_samples
 
-    def load(self, cfg_file, dat_file = None):
+    def load(self, cfg_file, dat_file = None, inf_file = None, hdr_file = None):
+        # TODO: add support for kwargs. It should clean up function parameters.
+
         # which extension: CFG or CFF?
         file_ext = cfg_file[-3:].upper()
         if file_ext == "CFG":
+            basename = cfg_file[:-3]
             # if not informed, infer dat_file with cfg_file
             if dat_file is None:
-                dat_file = cfg_file[:-3] + "DAT"
+                dat_file = cfg_file[:-3] + self.EXT_DAT
 
-            # load both
+            if inf_file is None:
+                inf_file = basename + self.EXT_INF
+
+            if hdr_file is None:
+                hdr_file = basename + self.EXT_HDR
+
+            # load both cfg and dat
             self._load_cfg_dat(cfg_file, dat_file)
+
+            # Load additional inf and hdr files, if they exist.
+            self._load_inf(inf_file)
+            self._load_hdr(hdr_file)
+
         elif file_ext == "CFF":
             # check if the CFF file exists
             # load file
@@ -527,6 +543,24 @@ class Comtrade:
 
         # copy dat object information
         self._dat_extract_data(dat)
+
+    def _load_inf(self, inf_file):
+        if os.path.exists(inf_file):
+            with file(inf_file, 'r') as file:
+                self._inf = file.read()
+                if len(self._inf) == 0:
+                    self._inf = None
+        else:
+            self._inf = None
+
+    def _load_hdr(self, hdr_file):
+        if os.path.exists(hdr_file):
+            with file(hdr_file, 'r') as file:
+                self._hdr = file.read()
+                if len(self._hdr) == 0:
+                    self._hdr = None
+        else:
+            self._hdr = None
 
     def _load_cff(self, cff_filepath):
         # stores each file type lines
