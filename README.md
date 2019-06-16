@@ -33,7 +33,7 @@ plt.show()
 
 A `Comtrade` class must be instantiated and the method `load` called with the `CFF` file path.
 
-`Comtrade.analog` and `Comtrade.digital` lists stores analog and digital channel sample lists respectively. These can be accessed through zero-based indexes, i.e., `Comtrade.analog[0]`. The list `Comtrade.time` stores each sample time in seconds.
+`Comtrade.analog` and `Comtrade.status` lists stores analog and status channel sample lists respectively. These can be accessed through zero-based indexes, i.e., `Comtrade.analog[0]`. The list `Comtrade.time` stores each sample time in seconds.
 
 More information can be accessed through `Comtrade.cfg` object, which stores data such as detailed channel information.
 
@@ -90,7 +90,7 @@ Feel free to pull requests implementing one of these unsupported features or fix
 | Time quality of the samples                           |      |       | x    | ✔              |
 | Analog channel time skew                              |      | x     | x    | Partial         |
 | Analog channel primary and secondary VT or CT ratio   |      | x     | x    | ✔              |
-| Digital channel phase and monitored circuit           |      | x     | x    | ✔              |
+| Status channel phase and monitored circuit            |      | x     | x    | ✔              |
 | Multiple sample rates                                 | x    | x     | x    | Partial         |
 | Nanoseconds scale                                     |      |       | x    | ✔              |
 

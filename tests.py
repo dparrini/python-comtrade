@@ -42,8 +42,8 @@ class TestCfg1Reading(unittest.TestCase):
     """String CFG and DAT 1999 pair test case."""
     def setUp(self):
         self.comtrade = Comtrade()
-        self.comtrade.read(COMTRADE_SAMPLE_1_CFG.splitlines(),
-            COMTRADE_SAMPLE_1_DAT.splitlines())
+        self.comtrade.read(COMTRADE_SAMPLE_1_CFG,
+            COMTRADE_SAMPLE_1_DAT)
 
     def test_station(self):
         self.assertEqual(self.comtrade.station_name, "STATION_NAME")

@@ -2,6 +2,7 @@
 
 import datetime as dt
 import errno
+import io
 import math
 import os
 import re
@@ -181,7 +182,7 @@ class Cfg:
 
     @property
     def digital_count(self):
-        warnings.warn(FutureWarning("digital_count is deprecated, use status_channels instead."))
+        warnings.warn(FutureWarning("digital_count is deprecated, use status_count instead."))
         return self._status_count
 
     def load(self, filepath):
@@ -196,7 +197,7 @@ class Cfg:
 
     def read(self, cfg_lines):
         if type(cfg_lines) is str:
-            self._read_file(cfg_lines.splitlines())
+            self._read_file(io.StringIO(cfg_lines))
         else:
             self._read_file(cfg_lines)
 
@@ -206,111 +207,129 @@ class Cfg:
         self._sample_rates = []
         self._analog_channels = []
         self._status_channels = []
-        for line in cfg:
-            if 0 == line_count:
-                # station, device, and comtrade standard revision information
-                packed = _read_sep_values(line)
-                if 3 == len(packed):
-                    # only 1999 revision and above has the standard revision year
-                    self._station_name, self._rec_dev_id, self._rev_year = packed
-                    self._rev_year = self._rev_year.strip()
 
-                    if self._rev_year not in (REV_1991, REV_1999, REV_2013):
-                        msg = WARNING_UNKNOWN_REVISION.format(self._rev_year)
-                        warnings.warn(Warning(msg))
-                else:
-                    self._station_name, self._rec_dev_id = packed
-                    self._rev_year = REV_1999
+        # First line
+        line = cfg.readline()
+        # station, device, and comtrade standard revision information
+        packed = _read_sep_values(line)
+        if 3 == len(packed):
+            # only 1999 revision and above has the standard revision year
+            self._station_name, self._rec_dev_id, self._rev_year = packed
+            self._rev_year = self._rev_year.strip()
 
-            if 1 == line_count:
-                # number of channels and its type
-                totchn, achn, dchn = _read_sep_values(line)
-                self._channels_count = int(totchn)
-                self._analog_count   = int(achn[:-1])
-                self._status_count  = int(dchn[:-1])
-                self._analog_channels = [None]*self._analog_count
-                self._status_channels = [None]*self._status_count
-            if 1 < line_count and line_count <= 1 + self._channels_count:
-                # channel information
-                # channel index
-                ichn = line_count - 2
-                packed = _read_sep_values(line)
-                # analog or status channel?
-                if ichn < self._analog_count:
-                    # analog channel index
-                    iachn = ichn
-                    # unpack values
-                    n, name, ph, ccbm, uu, a, b, skew, cmin, cmax, primary, secondary, pors = packed
-                    # type conversion
-                    n = int(n)
-                    a = float(a)
-                    b = _prevent_null(b, float, 0.0)
-                    skew = _prevent_null(skew, float, 0.0)
-                    cmin = float(cmin)
-                    cmax = float(cmax)
-                    primary = float(primary)
-                    secondary = float(secondary)
-                    self.analog_channels[iachn] = AnalogChannel(n, a, b, skew, 
-                        cmin, cmax, name, uu, ph, ccbm, primary, secondary, pors)
-                else:
-                    # status channel index
-                    idchn = ichn - self._analog_count
-                    # unpack values
-                    n, name, ph, ccbm, y = packed
-                    # type conversion
-                    n = int(n)
-                    y = int(y)
-                    self.status_channels[idchn] = StatusChannel(n, name, ph, ccbm, y)
+            if self._rev_year not in (REV_1991, REV_1999, REV_2013):
+                msg = WARNING_UNKNOWN_REVISION.format(self._rev_year)
+                warnings.warn(Warning(msg))
+        else:
+            self._station_name, self._rec_dev_id = packed
+            self._rev_year = REV_1999
+        line_count = line_count + 1
 
-            if line_count == 2 + self._channels_count:
-                self._frequency = float(line.strip())
-            if line_count == 3 + self._channels_count:
-                # number of different sample rates
-                self._nrates = int(line.strip())
-                if self._nrates == 0:
-                    self._nrates = 1
-                    self._timestamp_critical = True
-                else:
-                    self._timestamp_critical = False
-            if line_count > 3 + self._channels_count and line_count <= 3 + self._channels_count + self._nrates:
-                # each sample rate
-                samp, endsamp = _read_sep_values(line)
-                samp = float(samp)
-                endsamp = int(endsamp)
-                self.sample_rates.append([samp, endsamp])
+        # Second line
+        line = cfg.readline()
+        # number of channels and its type
+        totchn, achn, schn = _read_sep_values(line)
+        self._channels_count = int(totchn)
+        self._analog_count   = int(achn[:-1])
+        self._status_count  = int(schn[:-1])
+        self._analog_channels = [None]*self._analog_count
+        self._status_channels = [None]*self._status_count
+        line_count = line_count + 1
 
-            if line_count == 4 + self._channels_count + self._nrates:
-                # first data point and time base
-                ts_str = line.strip()
-                self._start_timestamp = _read_timestamp(ts_str)
-                self._time_base = self._get_time_base(ts_str)
-
-            if line_count == 5 + self._channels_count + self._nrates:
-                # event data point and time base
-                ts_str = line.strip()
-                self._trigger_timestamp = _read_timestamp(ts_str)
-
-                self._time_base = min([self.time_base, 
-                    self._get_time_base(ts_str)])
-
-            if line_count == 6 + self._channels_count + self._nrates:
-                # file type
-                self._ft = line.strip()
-
-            if self._rev_year in (REV_1999, REV_2013):
-                if line_count == 7 + self._channels_count + self._nrates:
-                    # timestamp multiplication factor
-                    self._timemult = float(line.strip())
-
-            if self._rev_year == REV_2013:
-                if line_count == (8 + self._channels_count + self._nrates):
-                    # time_code and local_code
-                    self._time_code, self._local_code = _read_sep_values(line)
-                if line_count == (9 + self._channels_count + self._nrates):
-                    # time_code and local_code
-                    self._tmq_code, self._leapsec = _read_sep_values(line)
-
+        # Analog channel description lines
+        for ichn in range(self._analog_count):
+            line = cfg.readline()
+            packed = _read_sep_values(line)
+            # unpack values
+            n, name, ph, ccbm, uu, a, b, skew, cmin, cmax, \
+                primary, secondary, pors = packed
+            # type conversion
+            n = int(n)
+            a = float(a)
+            b = _prevent_null(b, float, 0.0)
+            skew = _prevent_null(skew, float, 0.0)
+            cmin = float(cmin)
+            cmax = float(cmax)
+            primary = float(primary)
+            secondary = float(secondary)
+            self.analog_channels[ichn] = AnalogChannel(n, a, b, skew, 
+                cmin, cmax, name, uu, ph, ccbm, primary, secondary, pors)
             line_count = line_count + 1
+
+        # Status channel description lines
+        for ichn in range(self._status_count):
+            line = cfg.readline()
+            # unpack values
+            packed = _read_sep_values(line)
+            n, name, ph, ccbm, y = packed
+            # type conversion
+            n = int(n)
+            y = int(y)
+            self.status_channels[ichn] = StatusChannel(n, name, ph, ccbm, y)
+            line_count = line_count + 1
+
+        # Frequency line
+        line = cfg.readline()
+        self._frequency = float(line.strip())
+        line_count = line_count + 1
+
+        # Nrates line
+        # number of different sample rates
+        line = cfg.readline()
+        self._nrates = int(line.strip())
+        if self._nrates == 0:
+            self._nrates = 1
+            self._timestamp_critical = True
+        else:
+            self._timestamp_critical = False
+        line_count = line_count + 1
+
+        for inrate in range(self._nrates):
+            line = cfg.readline()
+            # each sample rate
+            samp, endsamp = _read_sep_values(line)
+            samp = float(samp)
+            endsamp = int(endsamp)
+            self.sample_rates.append([samp, endsamp])
+            line_count = line_count + 1
+
+        # First data point time and time base
+        line = cfg.readline()
+        ts_str = line.strip()
+        self._start_timestamp = _read_timestamp(ts_str)
+        self._time_base = self._get_time_base(ts_str)
+        line_count = line_count + 1
+
+        # Event data point and time base
+        line = cfg.readline()
+        ts_str = line.strip()
+        self._trigger_timestamp = _read_timestamp(ts_str)
+        self._time_base = min([self.time_base, self._get_time_base(ts_str)])
+        line_count = line_count + 1
+
+        # DAT file type
+        line = cfg.readline()
+        self._ft = line.strip()
+        line_count = line_count + 1
+
+        # Timestamp multiplication factor
+        if self._rev_year in (REV_1999, REV_2013):
+            line = cfg.readline()
+            self._timemult = float(line.strip())
+            line_count = line_count + 1
+
+        # time_code and local_code
+        if self._rev_year == REV_2013:
+            line = cfg.readline()
+
+            if line:
+                self._time_code, self._local_code = _read_sep_values(line)
+                line_count = line_count + 1
+
+                line = cfg.readline()
+                # time_code and local_code
+                self._tmq_code, self._leapsec = _read_sep_values(line)
+                line_count = line_count + 1
 
     def _get_time_base(self, timestamp):
         # Return the time base based on the fractionary part of the seconds
@@ -321,6 +340,7 @@ class Cfg:
             return self.TIME_BASE_NANOSEC
         else:
             return self.TIME_BASE_MICROSEC
+
 
 class Comtrade:
     # extensions
@@ -596,7 +616,7 @@ class Comtrade:
                     inf_lines.append(line.strip())
         
         # process CFF data
-        self.read(cfg_lines, dat_lines)
+        self.read("\n".join(cfg_lines), "\n".join(dat_lines))
 
         # stores additional data
         self._hdr = "\n".join(hdr_lines)
