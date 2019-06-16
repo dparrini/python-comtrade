@@ -41,7 +41,7 @@ COMTRADE_SAMPLE_3_CFG = """STATION_NAME,EQUIPMENT,2013
 class TestCfg1Reading(unittest.TestCase):
     """String CFG and DAT 1999 pair test case."""
     def setUp(self):
-        self.comtrade = Comtrade()
+        self.comtrade = Comtrade(ignore_warnings=True)
         self.comtrade.read(COMTRADE_SAMPLE_1_CFG,
             COMTRADE_SAMPLE_1_DAT)
 
@@ -86,7 +86,7 @@ class TestCfg1Reading(unittest.TestCase):
 class TestCffReading(unittest.TestCase):
     """CFF 2013 file test case."""
     def setUp(self):
-        self.comtrade = Comtrade()
+        self.comtrade = Comtrade(ignore_warnings=True)
         self.comtrade.load("sample_files/sample_ascii.cff")
 
     def test_station(self):
@@ -131,7 +131,7 @@ class TestCfg2Reading(TestCffReading):
     """CFG and DAT 2013 file pair test case (same content as the CFF test).
     """
     def setUp(self):
-        self.comtrade = Comtrade()
+        self.comtrade = Comtrade(ignore_warnings=True)
         self.comtrade.load("sample_files/sample_ascii.cfg")
 
     def test_hdr(self):
@@ -182,7 +182,7 @@ class TestBinaryReading(unittest.TestCase):
 
         # Load file.
         # start = time.time()
-        self.comtrade = Comtrade()
+        self.comtrade = Comtrade(ignore_warnings=True)
         self.comtrade.load("sample_files/{}.cfg".format(self.filename))
         # print("In {:.5f}s".format(time.time() - start))
 

@@ -51,7 +51,7 @@ def _prevent_null(str_value, type, default_value):
             return type(str_value)
 
 
-def _read_timestamp(tstamp):
+def _read_timestamp(tstamp, ignore_warnings=False):
     m = re_dt.match(tstamp)
     day = int(m.group(1))
     month = int(m.group(2))
@@ -68,7 +68,8 @@ def _read_timestamp(tstamp):
     if in_nanoseconds:
         # Nanoseconds resolution is not supported by datetime module, so it's
         # converted to integer below.
-        warnings.warn(Warning(WARNING_DATETIME_NANO))
+        if not ignore_warnings:
+            warnings.warn(Warning(WARNING_DATETIME_NANO))
         microsecond = int(microsecond * 1E-3)
 
     return dt.datetime(year, month, day, hour, minute, second, 
@@ -80,7 +81,7 @@ class Cfg:
     TIME_BASE_NANOSEC = 1E-9
     TIME_BASE_MICROSEC = 1E-6
 
-    def __init__(self):
+    def __init__(self, **kwargs):
         self.filename = ""
         # implicit data
         self._time_base = self.TIME_BASE_MICROSEC
@@ -109,6 +110,11 @@ class Cfg:
         # tmq_code,leapsec
         self._tmq_code = 0
         self._leapsec = 0
+
+        if "ignore_warnings" in kwargs:
+            self.ignore_warnings = kwargs["ignore_warnings"]
+        else:
+            self.ignore_warnings = False
 
     @property
     def station_name(self):
@@ -177,12 +183,14 @@ class Cfg:
     # Deprecated properties - Changed "Digital" for "Status"
     @property
     def digital_channels(self):
-        warnings.warn(FutureWarning("digital_channels is deprecated, use status_channels instead."))
+        if not self.ignore_warnings:
+            warnings.warn(FutureWarning("digital_channels is deprecated, use status_channels instead."))
         return self._status_channels
 
     @property
     def digital_count(self):
-        warnings.warn(FutureWarning("digital_count is deprecated, use status_count instead."))
+        if not self.ignore_warnings:
+            warnings.warn(FutureWarning("digital_count is deprecated, use status_count instead."))
         return self._status_count
 
     def load(self, filepath):
@@ -218,8 +226,9 @@ class Cfg:
             self._rev_year = self._rev_year.strip()
 
             if self._rev_year not in (REV_1991, REV_1999, REV_2013):
-                msg = WARNING_UNKNOWN_REVISION.format(self._rev_year)
-                warnings.warn(Warning(msg))
+                if not self.ignore_warnings:
+                    msg = WARNING_UNKNOWN_REVISION.format(self._rev_year)
+                    warnings.warn(Warning(msg))
         else:
             self._station_name, self._rec_dev_id = packed
             self._rev_year = REV_1999
@@ -296,14 +305,14 @@ class Cfg:
         # First data point time and time base
         line = cfg.readline()
         ts_str = line.strip()
-        self._start_timestamp = _read_timestamp(ts_str)
+        self._start_timestamp = _read_timestamp(ts_str, self.ignore_warnings)
         self._time_base = self._get_time_base(ts_str)
         line_count = line_count + 1
 
         # Event data point and time base
         line = cfg.readline()
         ts_str = line.strip()
-        self._trigger_timestamp = _read_timestamp(ts_str)
+        self._trigger_timestamp = _read_timestamp(ts_str, self.ignore_warnings)
         self._time_base = min([self.time_base, self._get_time_base(ts_str)])
         line_count = line_count + 1
 
@@ -351,10 +360,10 @@ class Comtrade:
     # format specific
     ASCII_SEPARATOR = ","
     
-    def __init__(self):
+    def __init__(self, **kwargs):
         self.filename = ""
 
-        self._cfg = Cfg()
+        self._cfg = Cfg(**kwargs)
 
         # Default CFG data
         self._analog_channel_ids = []
@@ -369,6 +378,11 @@ class Comtrade:
         # Additional CFF data (or additional comtrade files)
         self._hdr = None
         self._inf = None
+
+        if "ignore_warnings" in kwargs:
+            self.ignore_warnings = kwargs["ignore_warnings"]
+        else:
+            self.ignore_warnings = False
 
     @property
     def station_name(self):
@@ -462,17 +476,20 @@ class Comtrade:
     # Deprecated properties - Changed "Digital" for "Status"
     @property
     def digital_channel_ids(self):
-        warnings.warn(FutureWarning("digital_channel_ids is deprecated, use status_channel_ids instead."))
+        if not self.ignore_warnings:
+            warnings.warn(FutureWarning("digital_channel_ids is deprecated, use status_channel_ids instead."))
         return self._status_channel_ids
 
     @property
     def digital(self):
-        warnings.warn(FutureWarning("digital is deprecated, use status instead."))
+        if not self.ignore_warnings:
+            warnings.warn(FutureWarning("digital is deprecated, use status instead."))
         return self._status_values
 
     @property
     def digital_count(self):
-        warnings.warn(FutureWarning("digital_count is deprecated, use status_count instead."))
+        if not self.ignore_warnings:
+            warnings.warn(FutureWarning("digital_count is deprecated, use status_count instead."))
         return self._cfg.status_count
     
     def __str__(self):
