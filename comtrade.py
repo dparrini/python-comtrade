@@ -854,6 +854,33 @@ class DatReader:
         for i in range(status_count):
             self.status[i] = [0]   * steps
 
+    def _get_samp(self, n):
+        """Get the sampling rate for a sample n (1-based index)."""
+        # TODO: make tests.
+        last_sample_rate = None
+        for samp, endsamp in self._cfg.sample_rates:
+            if endsamp < n:
+                last_sample_rate = nrates
+            else:
+                break
+        return last_sample_rate
+
+    def _get_time(self, n, ts_value, time_base, time_mult):
+        # TODO: add option to enforce dat file timestamp, when available.
+        # TODO: make tests.
+        ts = 0
+        if ts_value != TIMESTAMP_MISSING:
+            # Use provided timestamp if its not missing
+            ts = ts_value * time_base * time_mult
+        else:
+            if not self._cfg._timestamp_critical:
+                # if the timestamp is missing, use calculated.
+                sample_rate = self._get_samp(n)
+                ts = (n - 1) / sample_rate
+            else:
+                raise Exception("Missing timestamp and no sample rate provided.")
+        return ts
+
     def parse(self, contents):
         """Virtual method, parse DAT file contents."""
         pass
@@ -869,7 +896,7 @@ class AsciiDatReader(DatReader):
         """Parse a ASCII file contents."""
         analog_count  = self._cfg.analog_count
         status_count = self._cfg.status_count
-        timemult = self._cfg.timemult
+        time_mult = self._cfg.timemult
         time_base = self._cfg.time_base
 
         # auxillary vectors (channels gains and offsets)
@@ -889,12 +916,15 @@ class AsciiDatReader(DatReader):
                 values = line.strip().split(self.ASCII_SEPARATOR)
 
                 n = values[0]
-                t = float(values[1]) * time_base * timemult
+                # Read time
+                ts_val = float(values[1])
+                ts = self._get_time(n, ts_val, time_base, time_mult)
+
                 avalues = [float(x)*a[i] + b[i] for i, x in enumerate(values[2:analog_count+2])]
                 svalues = [int(x) for x in values[status_count+2:]]
 
                 # store
-                self.time[line_number-1] = t
+                self.time[line_number-1] = ts
                 for i in range(analog_count):
                     self.analog[i][line_number - 1]  = avalues[i]
                 for i in range(status_count):
@@ -935,11 +965,10 @@ class BinaryDatReader(DatReader):
 
     def parse(self, contents):
         """Parse DAT binary file contents."""
-        timemult = self._cfg.timemult
+        time_mult = self._cfg.timemult
         time_base = self._cfg.time_base
-        frequency = self._cfg.frequency
         achannels = self._cfg.analog_count
-        dchannels = self._cfg.status_count
+        schannel = self._cfg.status_count
 
         # auxillary vectors (channels gains and offsets)
         a = [x.a for x in self._cfg.analog_channels]
@@ -947,10 +976,9 @@ class BinaryDatReader(DatReader):
 
         sample_id_bytes = self.SAMPLE_NUMBER_BYTES + self.TIME_BYTES
         abytes = achannels*self.ANALOG_BYTES
-        dbytes = self.STATUS_BYTES * math.ceil(dchannels / 16.0)
+        dbytes = self.STATUS_BYTES * math.ceil(schannel / 16.0)
         bytes_per_row = sample_id_bytes + abytes + dbytes
         groups_of_16bits = math.floor(dbytes / self.STATUS_BYTES)
-        period = 1 / frequency
 
         # Struct format.
         rowreader = struct.Struct(self.get_reader_format(achannels, dbytes))
@@ -973,21 +1001,11 @@ class BinaryDatReader(DatReader):
             values = rowreader.unpack(row)
             # Sample number
             n = values[0]
-            # Calculated time
-            # TODO: add support for multiple sampling rates
-            t = (n - 1) * period
-
-            # Read time
+            # Time stamp
             ts_val = values[1]
-            if ts_val != TIMESTAMP_MISSING:
-                ts = values[1] * time_base * timemult
-            else:
-                # if the timestamp is missing, use calculated.
-                ts = t
+            ts = self._get_time(n, ts_val, time_base, time_mult)
 
-            # Using calculated timestamp, ignoring file timestamp.
-            # TODO: add option to enforce dat file timestamp, when available
-            self.time[irow] = t
+            self.time[irow] = ts
 
             # Extract analog channel values.
             for ichannel in range(achannels):
@@ -1000,7 +1018,7 @@ class BinaryDatReader(DatReader):
                 group = values[achannels + 2 + igroup]
 
                 # for each group of 16 bits, extract the status channels
-                maxchn = min([ (igroup+1) * 16, dchannels])
+                maxchn = min([ (igroup+1) * 16, schannel])
                 for ichannel in range(igroup * 16, maxchn):
                     chnindex = ichannel - igroup*16
                     mask = int('0b01', 2) << chnindex
