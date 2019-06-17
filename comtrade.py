@@ -599,12 +599,28 @@ class Comtrade:
         self._status_values = dat.status
         self._total_samples  = dat.total_samples
 
-    def load(self, cfg_file, dat_file = None, inf_file = None, hdr_file = None):
+    def load(self, cfg_file, dat_file = None, **kwargs):
         """
         Load CFG, DAT, INF, and HDR files. Each must be a FileIO or StringIO
         object. dat_file, inf_file, and hdr_file are optional (Default: None).
+
+        cfg_file is the cfg file path, including its extension.
+        dat_file is optional, and may be set if the DAT file name differs from 
+            the CFG file name.
+
+        Keyword arguments:
+        inf_file -- optional INF file path (Default = None)
+        hdr_file -- optional HDR file path (Default = None)
         """
-        # TODO: add support for kwargs. It should clean up function parameters.
+        if "inf_file" in kwargs:
+            inf_file = kwargs["inf_file"]
+        else:
+            inf_file = None
+
+        if "hdr_file" in kwargs:
+            hdr_file = kwargs["hdr_file"]
+        else:
+            hdr_file = None
 
         # which extension: CFG or CFF?
         file_ext = cfg_file[-3:].upper()
@@ -629,11 +645,9 @@ class Comtrade:
 
         elif file_ext == "CFF":
             # check if the CFF file exists
-            # load file
             self._load_cff(cfg_file)
         else:
-            # TODO: raise exception: expected CFG file
-            pass
+            raise Exception(r"Expected CFG file path, got intead \"{}\".".format(cfg_file))
 
     def _load_cfg_dat(self, cfg_filepath, dat_filepath):
         self._cfg.load(cfg_filepath)
@@ -649,7 +663,7 @@ class Comtrade:
 
     def _load_inf(self, inf_file):
         if os.path.exists(inf_file):
-            with file(inf_file, 'r') as file:
+            with open(inf_file, 'r') as file:
                 self._inf = file.read()
                 if len(self._inf) == 0:
                     self._inf = None
@@ -658,7 +672,7 @@ class Comtrade:
 
     def _load_hdr(self, hdr_file):
         if os.path.exists(hdr_file):
-            with file(hdr_file, 'r') as file:
+            with open(hdr_file, 'r') as file:
                 self._hdr = file.read()
                 if len(self._hdr) == 0:
                     self._hdr = None
