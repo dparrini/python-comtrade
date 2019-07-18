@@ -921,7 +921,7 @@ class AsciiDatReader(DatReader):
                 ts = self._get_time(n, ts_val, time_base, time_mult)
 
                 avalues = [float(x)*a[i] + b[i] for i, x in enumerate(values[2:analog_count+2])]
-                svalues = [int(x) for x in values[status_count+2:]]
+                svalues = [int(x) for x in values[len(values)-status_count:]]
 
                 # store
                 self.time[line_number-1] = ts
