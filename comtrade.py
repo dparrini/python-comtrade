@@ -921,12 +921,12 @@ class AsciiDatReader(DatReader):
                 ts = self._get_time(n, ts_val, time_base, time_mult)
 
                 avalues = [float(x)*a[i] + b[i] for i, x in enumerate(values[2:analog_count+2])]
-                svalues = [int(x) for x in values[status_count+2:]]
+                svalues = [int(x) for x in values[analog_count+2:]]
 
                 # store
                 self.time[line_number-1] = ts
                 for i in range(analog_count):
-                    self.analog[i][line_number - 1]  = avalues[i]
+                    self.analog[i][line_number - 1] = avalues[i]
                 for i in range(status_count):
                     self.status[i][line_number - 1] = svalues[i]
 
@@ -943,9 +943,14 @@ class BinaryDatReader(DatReader):
 
     read_mode = "rb"
 
-    STRUCT_FORMAT = "LL {acount:d}h {dcount:d}H"
-    STRUCT_FORMAT_ANALOG_ONLY = "LL {acount:d}h"
-    STRUCT_FORMAT_STATUS_ONLY = "LL {dcount:d}H"
+    if struct.calcsize("L") == 4:
+        STRUCT_FORMAT = "LL {acount:d}h {dcount:d}H"
+        STRUCT_FORMAT_ANALOG_ONLY = "LL {acount:d}h"
+        STRUCT_FORMAT_STATUS_ONLY = "LL {dcount:d}H"
+    else:
+        STRUCT_FORMAT = "II {acount:d}h {dcount:d}H"
+        STRUCT_FORMAT_ANALOG_ONLY = "II {acount:d}h"
+        STRUCT_FORMAT_STATUS_ONLY = "II {dcount:d}H"
 
     def get_reader_format(self, analog_channels, status_bytes):
         # Number of status fields of 2 bytes based on the total number of 
