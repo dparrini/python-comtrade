@@ -409,7 +409,9 @@ class Comtrade:
 
         # Default CFG data
         self._analog_channel_ids = []
+        self._analog_phases = []
         self._status_channel_ids = []
+        self._status_phases = []
         self._timestamp_critical = False
 
         # DAT file data
@@ -462,9 +464,19 @@ class Comtrade:
         return self._analog_channel_ids
     
     @property
+    def analog_phases(self):
+        """Returns the analog phase name list."""
+        return self._analog_phases
+    
+    @property
     def status_channel_ids(self):
         """Returns the status channels name list."""
         return self._status_channel_ids
+    
+    @property
+    def status_phases(self):
+        """Returns the status phase name list."""
+        return self._status_phases
 
     @property
     def time(self):
@@ -582,6 +594,9 @@ class Comtrade:
 
         # channel ids
         self._cfg_extract_channels_ids(self._cfg)
+        
+        # channel phases
+        self._cfg_extract_phases(self._cfg)
 
         dat = self._get_dat_reader()
         dat.read(dat_lines, self._cfg)
@@ -592,6 +607,10 @@ class Comtrade:
     def _cfg_extract_channels_ids(self, cfg):
         self._analog_channel_ids = [channel.name for channel in cfg.analog_channels]
         self._status_channel_ids = [channel.name for channel in cfg.status_channels]
+        
+    def _cfg_extract_phases(self, cfg):
+        self._analog_phases = [channel.ph for channel in cfg.analog_channels]
+        self._status_phases = [channel.ph for channel in cfg.status_channels]
 
     def _dat_extract_data(self, dat):
         self._time_values    = dat.time
@@ -654,6 +673,9 @@ class Comtrade:
 
         # channel ids
         self._cfg_extract_channels_ids(self._cfg)
+        
+        # channel phases
+        self._cfg_extract_phases(self._cfg)
 
         dat = self._get_dat_reader()
         dat.load(dat_filepath, self._cfg)
@@ -921,7 +943,10 @@ class AsciiDatReader(DatReader):
                 ts = self._get_time(n, ts_val, time_base, time_mult)
 
                 avalues = [float(x)*a[i] + b[i] for i, x in enumerate(values[2:analog_count+2])]
-                svalues = [int(x) for x in values[status_count+2:]]
+                svalues = [int(x) for x in values[len(values)-status_count:]]
+                #svalues = [int(x) for x in values[status_count+2:]]
+                #for x in values[len(values)-status_count:]:
+                #    print(int(x))
 
                 # store
                 self.time[line_number-1] = ts
