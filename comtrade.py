@@ -184,6 +184,12 @@ class Cfg:
     def timemult(self) -> float:
         """Return the DAT time multiplier (Default = 1)."""
         return self._time_multiplier
+
+    @property
+    def timestamp_critical(self) -> bool:
+        """Returns whether the DAT file must contain non-zero
+         timestamp values."""
+        return self._timestamp_critical
     
     @property
     def start_timestamp(self):
@@ -890,15 +896,13 @@ class DatReader:
         for i in range(status_count):
             self.status[i] = [0] * steps
 
-    def _get_samp(self, n):
+    def _get_samp(self, n) -> float:
         """Get the sampling rate for a sample n (1-based index)."""
         # TODO: make tests.
-        last_sample_rate = None
+        last_sample_rate = 1.0
         for samp, endsamp in self._cfg.sample_rates:
-            if endsamp < n:
-                last_sample_rate = self._cfg.nrates
-            else:
-                break
+            if n <= endsamp:
+                return samp
         return last_sample_rate
 
     def _get_time(self, n: int, ts_value: float, time_base: float,
@@ -906,18 +910,17 @@ class DatReader:
         # TODO: add option to enforce dat file timestamp, when available.
         # TODO: make tests.
         ts = 0
-        if ts_value != TIMESTAMP_MISSING:
-            # Use provided timestamp if its not missing
-            ts = ts_value * time_base * time_multiplier
-        else:
-            if not self._cfg.timestamp_critical:
-                # if the timestamp is missing, use calculated.
-                sample_rate = self._get_samp(n)
-                ts = (n - 1) / sample_rate
+        sample_rate = self._get_samp(n)
+        if not self._cfg.timestamp_critical or ts_value == TIMESTAMP_MISSING:
+            # if the timestamp is missing, use calculated.
+            if sample_rate != 0.0:
+                return (n - 1) / sample_rate
             else:
                 raise Exception("Missing timestamp and no sample rate "
                                 "provided.")
-        return ts
+        else:
+            # Use provided timestamp if its not missing
+            return ts_value * time_base * time_multiplier
 
     def parse(self, contents):
         """Virtual method, parse DAT file contents."""
@@ -953,7 +956,7 @@ class AsciiDatReader(DatReader):
             if line_number <= self._total_samples:
                 values = line.strip().split(self.ASCII_SEPARATOR)
 
-                n = values[0]
+                n = int(values[0])
                 # Read time
                 ts_val = float(values[1])
                 ts = self._get_time(n, ts_val, time_base, time_mult)
