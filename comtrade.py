@@ -10,13 +10,14 @@ import struct
 import sys
 import warnings
 
+
 # COMTRADE standard revisions
 REV_1991 = "1991"
 REV_1999 = "1999"
 REV_2013 = "2013"
 
 # DAT file format types
-TYPE_ASCII  = "ASCII"
+TYPE_ASCII = "ASCII"
 TYPE_BINARY = "BINARY"
 TYPE_BINARY32 = "BINARY32"
 TYPE_FLOAT32 = "FLOAT32"
@@ -44,15 +45,15 @@ def _read_sep_values(line):
     return line.strip().split(SEPARATOR)
 
 
-def _prevent_null(str_value, type, default_value):
-        if len(str_value.strip()) == 0:
-            return default_value
-        else:
-            return type(str_value)
+def _prevent_null(str_value: str, value_type: type, default_value):
+    if len(str_value.strip()) == 0:
+        return default_value
+    else:
+        return value_type(str_value)
 
 
-def _read_timestamp(tstamp, ignore_warnings=False):
-    m = re_dt.match(tstamp)
+def _read_timestamp(timestamp: str, ignore_warnings=False):
+    m = re_dt.match(timestamp)
     day = int(m.group(1))
     month = int(m.group(2))
     year = int(m.group(3))
@@ -110,14 +111,14 @@ class Cfg:
         self._start_timestamp = ""
         self._trigger_timestamp = ""
         self._ft = TYPE_ASCII
-        self._timemult = 1.0
+        self._time_multiplier = 1.0
         # 2013 standard revision information
         # time_code,local_code = 0,0 means local time is UTC
         self._time_code = 0
         self._local_code = 0
         # tmq_code,leapsec
         self._tmq_code = 0
-        self._leapsec = 0
+        self._leap_second = 0
 
         if "ignore_warnings" in kwargs:
             self.ignore_warnings = kwargs["ignore_warnings"]
@@ -125,64 +126,64 @@ class Cfg:
             self.ignore_warnings = False
 
     @property
-    def station_name(self):
+    def station_name(self) -> str:
         """Return the recording device's station name."""
         return self._station_name
     
     @property
-    def rec_dev_id(self):
+    def rec_dev_id(self) -> str:
         """Return the recording device id."""
         return self._rec_dev_id
 
     @property
-    def rev_year(self):
+    def rev_year(self) -> int:
         """Return the COMTRADE revision year."""
         return self._rev_year
 
     @property
-    def channels_count(self):
+    def channels_count(self) -> int:
         """Return the number of channels, total."""
         return self._channels_count
 
     @property
-    def analog_channels(self):
+    def analog_channels(self) -> list:
         """Return the analog channels list with complete channel description."""
         return self._analog_channels
 
     @property
-    def status_channels(self):
+    def status_channels(self) -> list:
         """Return the status channels list with complete channel description."""
         return self._status_channels
     
     @property
-    def analog_count(self):
+    def analog_count(self) -> int:
         """Return the number of analog channels."""
         return self._analog_count
     
     @property
-    def status_count(self):
+    def status_count(self) -> int:
         """Return the number of status channels."""
         return self._status_count
     
     @property
-    def time_base(self):
+    def time_base(self) -> float:
         """Return the time base."""
         return self._time_base
 
     @property
-    def frequency(self):
+    def frequency(self) -> float:
         """Return the measured line frequency in Hertz."""
         return self._frequency
     
     @property
-    def ft(self):
+    def ft(self) -> str:
         """Return the expected DAT file format."""
         return self._ft
     
     @property
-    def timemult(self):
+    def timemult(self) -> float:
         """Return the DAT time multiplier (Default = 1)."""
-        return self._timemult
+        return self._time_multiplier
     
     @property
     def start_timestamp(self):
@@ -195,12 +196,12 @@ class Cfg:
         return self._trigger_timestamp
     
     @property
-    def nrates(self):
+    def nrates(self) -> int:
         """Return the number of different sample rates within the DAT file."""
         return self._nrates
     
     @property
-    def sample_rates(self):
+    def sample_rates(self) -> list:
         """
         Return a list with pairs describing the number of samples for a given
         sample rate.
@@ -209,17 +210,19 @@ class Cfg:
 
     # Deprecated properties - Changed "Digital" for "Status"
     @property
-    def digital_channels(self):
+    def digital_channels(self) -> list:
         """Returns the status channels bidimensional values list."""
         if not self.ignore_warnings:
-            warnings.warn(FutureWarning("digital_channels is deprecated, use status_channels instead."))
+            warnings.warn(FutureWarning("digital_channels is deprecated, "
+                                        "use status_channels instead."))
         return self._status_channels
 
     @property
-    def digital_count(self):
+    def digital_count(self) -> int:
         """Returns the number of status channels."""
         if not self.ignore_warnings:
-            warnings.warn(FutureWarning("digital_count is deprecated, use status_count instead."))
+            warnings.warn(FutureWarning("digital_count is deprecated, "
+                                        "use status_count instead."))
         return self._status_count
 
     def load(self, filepath):
@@ -271,8 +274,8 @@ class Cfg:
         # number of channels and its type
         totchn, achn, schn = _read_sep_values(line)
         self._channels_count = int(totchn)
-        self._analog_count   = int(achn[:-1])
-        self._status_count  = int(schn[:-1])
+        self._analog_count = int(achn[:-1])
+        self._status_count = int(schn[:-1])
         self._analog_channels = [None]*self._analog_count
         self._status_channels = [None]*self._status_count
         line_count = line_count + 1
@@ -356,7 +359,7 @@ class Cfg:
         # Timestamp multiplication factor
         if self._rev_year in (REV_1999, REV_2013):
             line = cfg.readline()
-            self._timemult = float(line.strip())
+            self._time_multiplier = float(line.strip())
             line_count = line_count + 1
 
         # time_code and local_code
@@ -369,7 +372,7 @@ class Cfg:
 
                 line = cfg.readline()
                 # time_code and local_code
-                self._tmq_code, self._leapsec = _read_sep_values(line)
+                self._tmq_code, self._leap_second = _read_sep_values(line)
                 line_count = line_count + 1
 
     def _get_time_base(self, timestamp):
@@ -429,22 +432,22 @@ class Comtrade:
             self.ignore_warnings = False
 
     @property
-    def station_name(self):
+    def station_name(self) -> str:
         """Return the recording device's station name."""
-        return self._cfg._station_name
+        return self._cfg.station_name
     
     @property
-    def rec_dev_id(self):
+    def rec_dev_id(self) -> str:
         """Return the recording device id."""
-        return self._cfg._rec_dev_id
+        return self._cfg.rec_dev_id
 
     @property
-    def rev_year(self):
+    def rev_year(self) -> int:
         """Return the COMTRADE revision year."""
-        return self._cfg._rev_year
+        return self._cfg.rev_year
 
     @property
-    def cfg(self):
+    def cfg(self) -> Cfg:
         """Return the underlying CFG class instance."""
         return self._cfg
 
@@ -459,47 +462,47 @@ class Comtrade:
         return self._inf
 
     @property
-    def analog_channel_ids(self):
+    def analog_channel_ids(self) -> list:
         """Returns the analog channels name list."""
         return self._analog_channel_ids
     
     @property
-    def analog_phases(self):
+    def analog_phases(self) -> list:
         """Returns the analog phase name list."""
         return self._analog_phases
     
     @property
-    def status_channel_ids(self):
+    def status_channel_ids(self) -> list:
         """Returns the status channels name list."""
         return self._status_channel_ids
     
     @property
-    def status_phases(self):
+    def status_phases(self) -> list:
         """Returns the status phase name list."""
         return self._status_phases
 
     @property
-    def time(self):
+    def time(self) -> list:
         """Return the time values list."""
         return self._time_values
 
     @property
-    def analog(self):
+    def analog(self) -> list:
         """Return the analog channel values bidimensional list."""
         return self._analog_values
     
     @property
-    def status(self):
+    def status(self) -> list:
         """Return the status channel values bidimensional list."""
         return self._status_values
 
     @property
-    def total_samples(self):
+    def total_samples(self) -> int:
         """Return the total number of samples (per channel)."""
         return self._total_samples
 
     @property
-    def frequency(self):
+    def frequency(self) -> float:
         """Return the measured line frequency in Hertz."""
         return self._cfg.frequency
 
@@ -514,22 +517,22 @@ class Comtrade:
         return self._cfg.trigger_timestamp
 
     @property
-    def channels_count(self):
+    def channels_count(self) -> int:
         """Return the number of channels, total."""
         return self._cfg.channels_count
 
     @property
-    def analog_count(self):
+    def analog_count(self) -> int:
         """Return the number of analog channels."""
         return self._cfg.analog_count
 
     @property
-    def status_count(self):
+    def status_count(self) -> int:
         """Return the number of status channels."""
         return self._cfg.status_count
 
     @property
-    def trigger_time(self):
+    def trigger_time(self) -> float:
         """Return relative trigger time in seconds."""
         stt = self._cfg.start_timestamp
         trg = self._cfg.trigger_timestamp
@@ -538,32 +541,32 @@ class Comtrade:
         return tsec
 
     @property
-    def time_base(self):
+    def time_base(self) -> float:
         """Return the time base."""
         return self._cfg.time_base
 
     @property
-    def ft(self):
+    def ft(self) -> str:
         """Return the expected DAT file format."""
         return self._cfg.ft
 
     # Deprecated properties - Changed "Digital" for "Status"
     @property
-    def digital_channel_ids(self):
+    def digital_channel_ids(self) -> list:
         """Returns the status channels name list."""
         if not self.ignore_warnings:
             warnings.warn(FutureWarning("digital_channel_ids is deprecated, use status_channel_ids instead."))
         return self._status_channel_ids
 
     @property
-    def digital(self):
+    def digital(self) -> list:
         """Returns the status channels bidimensional values list."""
         if not self.ignore_warnings:
             warnings.warn(FutureWarning("digital is deprecated, use status instead."))
         return self._status_values
 
     @property
-    def digital_count(self):
+    def digital_count(self) -> int:
         """Returns the number of status channels."""
         if not self.ignore_warnings:
             warnings.warn(FutureWarning("digital_count is deprecated, use status_count instead."))
@@ -586,7 +589,7 @@ class Comtrade:
             raise Exception("Not supported data file format: {}".format(self.ft))
         return dat
 
-    def read(self, cfg_lines, dat_lines):
+    def read(self, cfg_lines, dat_lines) -> None:
         """
         Read CFG and DAT files contents. Expects FileIO or StringIO objects.
         """
@@ -604,21 +607,21 @@ class Comtrade:
         # copy dat object information
         self._dat_extract_data(dat)
 
-    def _cfg_extract_channels_ids(self, cfg):
+    def _cfg_extract_channels_ids(self, cfg) -> None:
         self._analog_channel_ids = [channel.name for channel in cfg.analog_channels]
         self._status_channel_ids = [channel.name for channel in cfg.status_channels]
         
-    def _cfg_extract_phases(self, cfg):
+    def _cfg_extract_phases(self, cfg) -> None:
         self._analog_phases = [channel.ph for channel in cfg.analog_channels]
         self._status_phases = [channel.ph for channel in cfg.status_channels]
 
-    def _dat_extract_data(self, dat):
-        self._time_values    = dat.time
-        self._analog_values  = dat.analog
+    def _dat_extract_data(self, dat) -> None:
+        self._time_values   = dat.time
+        self._analog_values = dat.analog
         self._status_values = dat.status
-        self._total_samples  = dat.total_samples
+        self._total_samples = dat.total_samples
 
-    def load(self, cfg_file, dat_file = None, **kwargs):
+    def load(self, cfg_file, dat_file = None, **kwargs) -> None:
         """
         Load CFG, DAT, INF, and HDR files. Each must be a FileIO or StringIO
         object. dat_file, inf_file, and hdr_file are optional (Default: None).
@@ -701,13 +704,13 @@ class Comtrade:
         else:
             self._hdr = None
 
-    def _load_cff(self, cff_filepath):
+    def _load_cff(self, cff_file_path: str):
         # stores each file type lines
         cfg_lines = []
         dat_lines = []
         hdr_lines = []
         inf_lines = []
-        with open(cff_filepath, "r") as file:
+        with open(cff_file_path, "r") as file:
             line_number = 0
             # file type: CFG, HDR, INF, DAT
             ftype = None
@@ -748,14 +751,22 @@ class Comtrade:
 
     def cfg_summary(self):
         """Returns the CFG attributes summary string."""
-        st = "Channels (total,A,D): {}A + {}D = {}\n".format(self.analog_count, self.status_count, self.channels_count)
-        st = st + "Line frequency: {} Hz\n".format(self.frequency)
+        header_line = "Channels (total,A,D): {}A + {}D = {}"
+        sample_line = "Sample rate of {} Hz to the sample #{}"
+        interval_line = "From {} to {} with time mult. = {}"
+        format_line = "{} format"
+
+        lines = [header_line.format(self.analog_count, self.status_count,
+                                    self.channels_count),
+                 "Line frequency: {} Hz".format(self.frequency)]
         for i in range(self._cfg.nrates):
             rate, points = self._cfg.sample_rates[i]
-            st = st + "Sample rate of {} Hz to the sample #{}\n".format(rate, points)
-        st = st + "From {} to {} with time mult. = {}\n".format(self.start_timestamp, self.trigger_timestamp, self._cfg.timemult)
-        st = st + "{} format\n".format(self.ft)
-        return st
+            lines.append(sample_line.format(rate, points))
+        lines.append(interval_line.format(self.start_timestamp,
+                                          self.trigger_timestamp,
+                                          self._cfg.timemult))
+        lines.append(format_line.format(self.ft))
+        return "\n".join(lines)
 
 
 class Channel:
@@ -773,8 +784,9 @@ class Channel:
 
 class StatusChannel(Channel):
     """Holds status channel description data."""
-    def __init__(self, n, name='', ph='', ccbm='', y=''):
+    def __init__(self, n: int, name='', ph='', ccbm='', y=''):
         """StatusChannel class constructor."""
+        super().__init__(n, name, ph, ccbm)
         self.name = name
         self.n = n
         self.name = name
@@ -788,9 +800,11 @@ class StatusChannel(Channel):
 
 class AnalogChannel(Channel):
     """Holds analog channel description data."""
-    def __init__(self, n, a, b=0.0, skew=0.0, cmin=-32767, cmax=32767, 
-        name='', uu='', ph='', ccbm='', primary=1, secondary=1, pors='P'):
+    def __init__(self, n: int, a: float, b=0.0, skew=0.0, cmin=-32767,
+                 cmax=32767, name='', uu='', ph='', ccbm='', primary=1,
+                 secondary=1, pors='P'):
         """AnalogChannel class constructor."""
+        super().__init__(n, name, ph, ccbm)
         self.name = name
         self.uu = uu
         self.n = n
@@ -810,7 +824,7 @@ class AnalogChannel(Channel):
     def __str__(self):
         fields = [str(self.n), self.name, self.ph, self.ccbm, self.uu, 
             str(self.a), str(self.b), str(self.skew), str(self.cmin), 
-            str(self.cmax), str(self.primary), str(self.secondary), self.ps]
+            str(self.cmax), str(self.primary), str(self.secondary), self.pors]
         return ','.join(fields)
 
 
@@ -820,7 +834,7 @@ class DatReader:
 
     def __init__(self):
         """DatReader class constructor."""
-        self.filepath = ""
+        self.file_path = ""
         self._content = None
         self._cfg = None
         self.time = []
@@ -835,23 +849,23 @@ class DatReader:
 
     def load(self, dat_filepath, cfg):
         """Load a DAT file and parse its contents."""
-        self.filepath = dat_filepath
+        self.file_path = dat_filepath
         self._content = None
-        if os.path.isfile(self.filepath):
+        if os.path.isfile(self.file_path):
             # extract CFG file information regarding data dimensions
             self._cfg = cfg
             self._preallocate()
-            with open(self.filepath, self.read_mode) as contents:
+            with open(self.file_path, self.read_mode) as contents:
                 self.parse(contents)
         else:
-            raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), 
-                self.filepath)
+            raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT),
+                                    self.file_path)
 
     def read(self, dat_lines, cfg):
         """
         Read a DAT file contents, expecting a list of string or FileIO object.
         """
-        self.filepath = None
+        self.file_path = None
         self._content = dat_lines
         self._cfg = cfg
         self._preallocate()
@@ -859,7 +873,7 @@ class DatReader:
 
     def _preallocate(self):
         # read from the cfg file the number of samples in the dat file
-        steps = self._cfg.sample_rates[-1][1] # last samp field
+        steps = self._cfg.sample_rates[-1][1]  # last samp field
         self._total_samples = steps
 
         # analog and status count
@@ -868,13 +882,13 @@ class DatReader:
 
         # preallocate analog and status values
         self.time = [0.0] * steps
-        self.analog  = [None] * analog_count
+        self.analog = [None] * analog_count
         self.status = [None] * status_count
         # preallocate each channel values with zeros
         for i in range(analog_count):
-            self.analog[i]  = [0.0] * steps
+            self.analog[i] = [0.0] * steps
         for i in range(status_count):
-            self.status[i] = [0]   * steps
+            self.status[i] = [0] * steps
 
     def _get_samp(self, n):
         """Get the sampling rate for a sample n (1-based index)."""
@@ -882,25 +896,27 @@ class DatReader:
         last_sample_rate = None
         for samp, endsamp in self._cfg.sample_rates:
             if endsamp < n:
-                last_sample_rate = nrates
+                last_sample_rate = self._cfg.nrates
             else:
                 break
         return last_sample_rate
 
-    def _get_time(self, n, ts_value, time_base, time_mult):
+    def _get_time(self, n: int, ts_value: float, time_base: float,
+                  time_multiplier: float):
         # TODO: add option to enforce dat file timestamp, when available.
         # TODO: make tests.
         ts = 0
         if ts_value != TIMESTAMP_MISSING:
             # Use provided timestamp if its not missing
-            ts = ts_value * time_base * time_mult
+            ts = ts_value * time_base * time_multiplier
         else:
-            if not self._cfg._timestamp_critical:
+            if not self._cfg.timestamp_critical:
                 # if the timestamp is missing, use calculated.
                 sample_rate = self._get_samp(n)
                 ts = (n - 1) / sample_rate
             else:
-                raise Exception("Missing timestamp and no sample rate provided.")
+                raise Exception("Missing timestamp and no sample rate "
+                                "provided.")
         return ts
 
     def parse(self, contents):
@@ -916,12 +932,12 @@ class AsciiDatReader(DatReader):
 
     def parse(self, contents):
         """Parse a ASCII file contents."""
-        analog_count  = self._cfg.analog_count
+        analog_count = self._cfg.analog_count
         status_count = self._cfg.status_count
         time_mult = self._cfg.timemult
         time_base = self._cfg.time_base
 
-        # auxillary vectors (channels gains and offsets)
+        # auxiliary vectors (channels gains and offsets)
         a = [x.a for x in self._cfg.analog_channels]
         b = [x.b for x in self._cfg.analog_channels]
 
@@ -1008,24 +1024,29 @@ class BinaryDatReader(DatReader):
         groups_of_16bits = math.floor(dbytes / self.STATUS_BYTES)
 
         # Struct format.
-        rowreader = struct.Struct(self.get_reader_format(achannels, dbytes))
+        row_reader = struct.Struct(self.get_reader_format(achannels, dbytes))
 
         # Row reading function.
-        nextrow = None
-        if hasattr(contents, 'read'):
-            # It's an IO buffer.
-            nextrow = lambda offset: contents.read(bytes_per_row)
+        next_row = None
+        if isinstance(contents, io.TextIOBase) or \
+                isinstance(contents, io.BufferedIOBase):
+            def next_row(offset: int):
+                return contents.read(bytes_per_row)
+
+        elif isinstance(contents, str):
+            def next_row(offset: int):
+                return contents[offset:offset + bytes_per_row]
         else:
-            # It's an array.
-            nextrow = lambda offset: contents[offset:offset + bytes_per_row]
+            raise TypeError("Unsupported content type: {}".format(
+                type(contents)))
 
         # Get next row.
         buffer_offset = 0
-        row = nextrow(buffer_offset)
+        row = next_row(buffer_offset)
 
         irow = 0
         while row != b'':
-            values = rowreader.unpack(row)
+            values = row_reader.unpack(row)
             # Sample number
             n = values[0]
             # Time stamp
@@ -1056,7 +1077,7 @@ class BinaryDatReader(DatReader):
             # Get the next row
             irow += 1
             buffer_offset += bytes_per_row
-            row = nextrow(buffer_offset)
+            row = next_row(buffer_offset)
 
 
 class Binary32DatReader(BinaryDatReader):

@@ -21,7 +21,8 @@ ASCII
 1
 """
 
-COMTRADE_SAMPLE_1_DAT ="1, 0, 0,0\n2,347,-1,1\n"
+
+COMTRADE_SAMPLE_1_DAT = "1, 0, 0,0\n2,347,-1,1\n"
 
 
 COMTRADE_SAMPLE_3_CFG = """STATION_NAME,EQUIPMENT,2013
@@ -42,8 +43,7 @@ class TestCfg1Reading(unittest.TestCase):
     """String CFG and DAT 1999 pair test case."""
     def setUp(self):
         self.comtrade = Comtrade(ignore_warnings=True)
-        self.comtrade.read(COMTRADE_SAMPLE_1_CFG,
-            COMTRADE_SAMPLE_1_DAT)
+        self.comtrade.read(COMTRADE_SAMPLE_1_CFG, COMTRADE_SAMPLE_1_DAT)
 
     def test_station(self):
         self.assertEqual(self.comtrade.station_name, "STATION_NAME")
@@ -71,17 +71,18 @@ class TestCfg1Reading(unittest.TestCase):
 
     def test_timestamp(self):
         self.assertEqual(self.comtrade.start_timestamp, 
-            dt.datetime(2000, 1, 1, 10, 30, 0, 228000, None))
+                         dt.datetime(2000, 1, 1, 10, 30, 0, 228000, None))
 
         self.assertEqual(self.comtrade.trigger_timestamp, 
-            dt.datetime(2000, 1, 1, 10, 30, 0, 722000, None))
+                         dt.datetime(2000, 1, 1, 10, 30, 0, 722000, None))
 
     def test_time_base(self):
         self.assertEqual(self.comtrade.time_base, 
-            self.comtrade.cfg.TIME_BASE_MICROSEC)
+                         self.comtrade.cfg.TIME_BASE_MICROSEC)
 
     def test_ft(self):
         self.assertEqual(self.comtrade.ft, "ASCII")
+
 
 class TestCffReading(unittest.TestCase):
     """CFF 2013 file test case."""
@@ -142,7 +143,7 @@ class TestCfg2Reading(TestCffReading):
 
 
 class TestBinaryReading(unittest.TestCase):
-    datformat = comtrade.TYPE_BINARY
+    dat_format = comtrade.TYPE_BINARY
     filename = "temp_binary"
 
     def parseAnalog(self, analog_value):
@@ -155,12 +156,13 @@ class TestBinaryReading(unittest.TestCase):
         # Sample auto-generated Comtrade file.
         timebase = 1e+6 # seconds to microseconds
         timemult = 1
-        maxtime = 2
+        max_time = 2
         self.samples = 10000
-        sample_freq = maxtime / self.samples
+        sample_freq = max_time / self.samples
         # Create temporary cfg file.
-        cfg_contents = COMTRADE_SAMPLE_3_CFG.format(samples=self.samples, 
-            seconds=maxtime, format=self.datformat)
+        cfg_contents = COMTRADE_SAMPLE_3_CFG.format(samples=self.samples,
+                                                    seconds=max_time,
+                                                    format=self.dat_format)
         with open("sample_files/{}.cfg".format(self.filename), 'w') as file:
             file.write(cfg_contents)
 
@@ -169,9 +171,14 @@ class TestBinaryReading(unittest.TestCase):
 
         # Create temporary binary dat file, with one analog and one status
         # channel.
-        maxtime = 2.0
-        analog = lambda t : math.cos(2*math.pi*60*t)*100
-        status = lambda t : t > maxtime/2.0 and 1 or 0
+        max_time = 2.0
+
+        def analog(t: float) -> float:
+            return math.cos(2*math.pi*60*t)*100
+
+        def status(t: float) -> bool:
+            return t > max_time/2.0 and 1 or 0
+
         with open("sample_files/{}.dat".format(self.filename), 'wb') as file:
             for isample in range(0, self.samples):
                 t = isample * sample_freq
@@ -214,20 +221,20 @@ class TestBinaryReading(unittest.TestCase):
 
     def test_timestamps(self):
         self.assertEqual(self.comtrade.start_timestamp, 
-            dt.datetime(2019, 1, 1, 0, 0, 0, 0, None))
+                         dt.datetime(2019, 1, 1, 0, 0, 0, 0, None))
         self.assertEqual(self.comtrade.trigger_timestamp, 
-            dt.datetime(2019, 1, 1, 0, 0, 2, 0, None))
+                         dt.datetime(2019, 1, 1, 0, 0, 2, 0, None))
 
     def test_time_base(self):
         self.assertEqual(self.comtrade.time_base, 
             self.comtrade.cfg.TIME_BASE_NANOSEC)
 
     def test_ft(self):
-        self.assertEqual(self.comtrade.ft, self.datformat)
+        self.assertEqual(self.comtrade.ft, self.dat_format)
 
 
 class TestBinary32Reading(TestBinaryReading):
-    datformat = comtrade.TYPE_BINARY32
+    dat_format = comtrade.TYPE_BINARY32
     filename = "temp_binary32"
 
     def parseAnalog(self, analog_value):
@@ -238,7 +245,7 @@ class TestBinary32Reading(TestBinaryReading):
 
 
 class TestFloat32Reading(TestBinaryReading):
-    datformat = comtrade.TYPE_FLOAT32
+    dat_format = comtrade.TYPE_FLOAT32
     filename = "temp_float32"
 
     def parseAnalog(self, analog_value):
