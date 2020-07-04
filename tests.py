@@ -39,6 +39,10 @@ COMTRADE_SAMPLE_3_CFG = """STATION_NAME,EQUIPMENT,2013
 """
 
 
+COMTRADE_SAMPLE_4_CFG_FILE = "sample_files/sample_bin.cfg"
+COMTRADE_SAMPLE_4_DAT_FILE = "sample_files/sample_bin.dat"
+
+
 class TestCfg1Reading(unittest.TestCase):
     """String CFG and DAT 1999 pair test case."""
     def setUp(self):
@@ -253,6 +257,30 @@ class TestFloat32Reading(TestBinaryReading):
 
     def getFormat(self):
         return 'Lf f H'
+
+
+class TestRealBinaryReading(unittest.TestCase):
+    def setUp(self):
+        self.comtrade = Comtrade(ignore_warnings=True)
+        self.comtrade.load(COMTRADE_SAMPLE_4_CFG_FILE,
+                           COMTRADE_SAMPLE_4_DAT_FILE)
+
+    def test_value_conversion(self):
+        va_4 = -23425 * 0.000361849
+        self.assertAlmostEqual(va_4, self.comtrade.analog[0][3])
+
+    def test_values(self):
+        va = self.comtrade.analog[0][0]
+        vb = self.comtrade.analog[1][0]
+        vc = self.comtrade.analog[2][0]
+        vn = self.comtrade.analog[3][0]
+        # sum of phase-ground voltages is approximately 0
+        self.assertAlmostEqual(0.0, va + vb + vc + vn, 1)
+
+    def test_time(self):
+        time_diff = self.comtrade.time[2] - self.comtrade.time[1]
+        sample_rate = self.comtrade.cfg.sample_rates[0][0]
+        self.assertAlmostEqual(1.0 / sample_rate, time_diff)
 
 
 if __name__ == "__main__":
