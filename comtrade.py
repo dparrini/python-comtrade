@@ -32,7 +32,7 @@ CFF_HEADER_REXP = "(?i)--- file type: ([a-z]+)(?:\\s([a-z]+))? ---$"
 SEPARATOR = ","
 
 # timestamp regular expression
-re_dt = re.compile("([0-9]{1,2})/([0-9]{1,2})/([0-9]{4}),([0-9]{2}):([0-9]{2}):([0-9]{2})\\.([0-9]{5,12})")
+re_dt = re.compile("([0-9]{1,2})/([0-9]{1,2})/([0-9]{2,4}),([0-9]{2}):([0-9]{2}):([0-9]{2})\\.([0-9]{5,12})")
 
 # Non-standard revision warning
 WARNING_UNKNOWN_REVISION = "Unknown standard revision \"{}\""
