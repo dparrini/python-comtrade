@@ -41,8 +41,12 @@ WARNING_DATETIME_NANO = "Unsupported datetime objects with nanoseconds \
 resolution. Using truncated values."
 
 
-def _read_sep_values(line):
-    return line.strip().split(SEPARATOR)
+def _read_sep_values(line, expected: int = -1, default: str = ''):
+    values = line.strip().split(SEPARATOR)
+    if expected == -1 or len(values) == expected:
+        return values
+    return [values[i] if i < len(values) else default
+            for i in range(expected)]
 
 
 def _prevent_null(str_value: str, value_type: type, default_value):
@@ -278,7 +282,7 @@ class Cfg:
         # Second line
         line = cfg.readline()
         # number of channels and its type
-        totchn, achn, schn = _read_sep_values(line)
+        totchn, achn, schn = _read_sep_values(line, 3, '0')
         self._channels_count = int(totchn)
         self._analog_count = int(achn[:-1])
         self._status_count = int(schn[:-1])
@@ -289,7 +293,7 @@ class Cfg:
         # Analog channel description lines
         for ichn in range(self._analog_count):
             line = cfg.readline()
-            packed = _read_sep_values(line)
+            packed = _read_sep_values(line, 13, '0')
             # unpack values
             n, name, ph, ccbm, uu, a, b, skew, cmin, cmax, \
                 primary, secondary, pors = packed
@@ -310,7 +314,7 @@ class Cfg:
         for ichn in range(self._status_count):
             line = cfg.readline()
             # unpack values
-            packed = _read_sep_values(line)
+            packed = _read_sep_values(line, 5, '0')
             n, name, ph, ccbm, y = packed
             # type conversion
             n = int(n)
@@ -364,8 +368,11 @@ class Cfg:
 
         # Timestamp multiplication factor
         if self._rev_year in (REV_1999, REV_2013):
-            line = cfg.readline()
-            self._time_multiplier = float(line.strip())
+            line = cfg.readline().strip()
+            if len(line) > 0:
+                self._time_multiplier = float(line)
+            else:
+                self._time_multiplier = 1.0
             line_count = line_count + 1
 
         # time_code and local_code
