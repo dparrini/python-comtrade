@@ -39,8 +39,8 @@ COMTRADE_SAMPLE_3_CFG = """STATION_NAME,EQUIPMENT,2013
 """
 
 
-COMTRADE_SAMPLE_4_CFG_FILE = "sample_files/sample_bin.cfg"
-COMTRADE_SAMPLE_4_DAT_FILE = "sample_files/sample_bin.dat"
+COMTRADE_SAMPLE_4_CFG_FILE = "tests/sample_files/sample_bin.cfg"
+COMTRADE_SAMPLE_4_DAT_FILE = "tests/sample_files/sample_bin.dat"
 
 
 class TestCfg1Reading(unittest.TestCase):
@@ -92,7 +92,7 @@ class TestCffReading(unittest.TestCase):
     """CFF 2013 file test case."""
     def setUp(self):
         self.comtrade = Comtrade(ignore_warnings=True)
-        self.comtrade.load("sample_files/sample_ascii.cff")
+        self.comtrade.load("tests/sample_files/sample_ascii.cff")
 
     def test_station(self):
         self.assertEqual(self.comtrade.station_name, "SMARTSTATION")
@@ -137,7 +137,7 @@ class TestCfg2Reading(TestCffReading):
     """
     def setUp(self):
         self.comtrade = Comtrade(ignore_warnings=True)
-        self.comtrade.load("sample_files/sample_ascii.cfg")
+        self.comtrade.load("tests/sample_files/sample_ascii.cfg")
 
     def test_hdr(self):
         self.assertIsNone(self.comtrade.hdr)
@@ -167,7 +167,8 @@ class TestBinaryReading(unittest.TestCase):
         cfg_contents = COMTRADE_SAMPLE_3_CFG.format(samples=self.samples,
                                                     seconds=max_time,
                                                     format=self.dat_format)
-        with open("sample_files/{}.cfg".format(self.filename), 'w') as file:
+        file_path = os.path.abspath("tests/{}.cfg".format(self.filename))
+        with open(file_path, 'w') as file:
             file.write(cfg_contents)
 
         # Struct object to write data.
@@ -183,7 +184,8 @@ class TestBinaryReading(unittest.TestCase):
         def status(t: float) -> bool:
             return t > max_time/2.0 and 1 or 0
 
-        with open("sample_files/{}.dat".format(self.filename), 'wb') as file:
+        file_path = os.path.abspath("tests/{}.dat".format(self.filename))
+        with open(file_path, 'wb') as file:
             for isample in range(0, self.samples):
                 t = isample * sample_freq
                 t_us = t * timebase * timemult
@@ -191,16 +193,15 @@ class TestBinaryReading(unittest.TestCase):
                 y_status = status(t)
                 file.write(datawriter.pack(isample +1, t_us, y_analog, y_status))
 
-        # Load file.
-        # start = time.time()
+        # Load file
+        file_path = os.path.abspath("tests/{}".format(self.filename))
         self.comtrade = Comtrade(ignore_warnings=True)
-        self.comtrade.load("sample_files/{}.cfg".format(self.filename))
-        # print("In {:.5f}s".format(time.time() - start))
+        self.comtrade.load(file_path + ".cfg".format(self.filename))
 
     def tearDown(self):
         # Remove temporary files.
-        os.remove("sample_files/{}.cfg".format(self.filename))
-        os.remove("sample_files/{}.dat".format(self.filename))
+        os.remove("tests/{}.cfg".format(self.filename))
+        os.remove("tests/{}.dat".format(self.filename))
 
     def test_total_samples(self):
         self.assertEqual(self.comtrade.total_samples,   self.samples)

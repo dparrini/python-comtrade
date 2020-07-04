@@ -3,11 +3,20 @@
 __Python Comtrade__ is a module for Python 3 designed to read _Common Format for Transient Data Exchange_ (COMTRADE) files. These consists of oscillography data recorded during power system outages, control systems tests, validation and tests of field equipment, protective relaying logs, etc. The COMTRADE format is defined by IEEE Standards, summarized in the table below. Some equipment vendors put additional information in proprietary versions of it. This module aims IEEE definitions but may support those proprietary versions.
 
 
-| Standard                            | Revision |
-|:------------------------------------|:--------:|
-| IEEE C37.111™-1991                  |  1991    |
-| IEEE C37.111™-1999                  |  1999    |
-| IEEE C37.111™-2013 / IEC 60255-24   |  2013    |
+| Standard                               | Revision |
+|:---------------------------------------|:--------:|
+| IEEE C37.111(TM)-1991                  |  1991    |
+| IEEE C37.111(TM)-1999                  |  1999    |
+| IEEE C37.111(TM)-2013 / IEC 60255-24   |  2013    |
+
+
+## Installation
+
+```
+pip install comtrade
+```
+
+Or just copy `comtrade.py` from this repository.
 
 
 ## How to Use
@@ -70,29 +79,29 @@ Feel free to pull requests implementing one of these unsupported features or fix
 
 | Formats                                               | 1991 |  1999 | 2013 | Module Support  |
 |:------------------------------------------------------|:----:|:-----:|:----:|:---------------:|
-| CFG file format                                       | x    | x     | x    | ✔              |
-| DAT file format                                       | x    | x     | x    | ✔              |
-| HDR file format                                       | x    | x     | x    | ❌              |
-| INF file format                                       |      | x     | x    | ❌              |
-| CFF file format                                       |      |       | x    | ✔              |
-| ASCII data file format                                | x    | x     | x    | ✔              |
-| Binary data file format                               | x    | x     | x    | ✔              |
-| Binary32 data file format                             |      |       | x    | ✔              |
-| Float32 data file format                              |      |       | x    | ✔              |
-| Schema for phasor data                                |      |       | x    | ❌              |
+| CFG file format                                       | x    | x     | x    | x               |
+| DAT file format                                       | x    | x     | x    | x               |
+| HDR file format                                       | x    | x     | x    | no              |
+| INF file format                                       |      | x     | x    | no              |
+| CFF file format                                       |      |       | x    | x               |
+| ASCII data file format                                | x    | x     | x    | x               |
+| Binary data file format                               | x    | x     | x    | x               |
+| Binary32 data file format                             |      |       | x    | x               |
+| Float32 data file format                              |      |       | x    | x               |
+| Schema for phasor data                                |      |       | x    | no              |
 
 
 | Features                                              | 1991 |  1999 | 2013 | Module Support  |
 |:------------------------------------------------------|:----:|:-----:|:----:|:---------------:|
-| COMTRADE standard revision                            |      | x     | x    | ✔              |
-| Timestamp multiplication factor                       |      | x     | x    | ✔              |
-| Time code and local code                              |      |       | x    | ✔              |
-| Time quality of the samples                           |      |       | x    | ✔              |
+| COMTRADE standard revision                            |      | x     | x    | x               |
+| Timestamp multiplication factor                       |      | x     | x    | x               |
+| Time code and local code                              |      |       | x    | x               |
+| Time quality of the samples                           |      |       | x    | x               |
 | Analog channel time skew                              |      | x     | x    | Partial         |
-| Analog channel primary and secondary VT or CT ratio   |      | x     | x    | ✔              |
-| Status channel phase and monitored circuit            |      | x     | x    | ✔              |
+| Analog channel primary and secondary VT or CT ratio   |      | x     | x    | x               |
+| Status channel phase and monitored circuit            |      | x     | x    | x               |
 | Multiple sample rates                                 | x    | x     | x    | Partial         |
-| Nanoseconds scale                                     |      |       | x    | ✔              |
+| Nanoseconds scale                                     |      |       | x    | x               |
 
 
 ### Unsupported features
