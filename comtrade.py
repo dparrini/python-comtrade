@@ -56,7 +56,7 @@ def _prevent_null(str_value: str, value_type: type, default_value):
         return value_type(str_value)
 
 
-def _read_timestamp(timestamp: str, ignore_warnings=False):
+def _read_timestamp(timestamp: str, ignore_warnings=False) -> dt.datetime:
     m = re_dt.match(timestamp)
     day = int(m.group(1))
     month = int(m.group(2))
@@ -112,8 +112,8 @@ class Cfg:
         self._nrates = 1
         self._sample_rates = []
         self._timestamp_critical = False
-        self._start_timestamp = ""
-        self._trigger_timestamp = ""
+        self._start_timestamp = dt.datetime(1900, 1, 1)
+        self._trigger_timestamp = dt.datetime(1900, 1, 1)
         self._ft = TYPE_ASCII
         self._time_multiplier = 1.0
         # 2013 standard revision information
@@ -196,12 +196,12 @@ class Cfg:
         return self._timestamp_critical
     
     @property
-    def start_timestamp(self):
+    def start_timestamp(self) -> dt.datetime:
         """Return the recording start time stamp as a datetime object."""
         return self._start_timestamp
     
     @property
-    def trigger_timestamp(self):
+    def trigger_timestamp(self) -> dt.datetime:
         """Return the trigger time stamp as a datetime object."""
         return self._trigger_timestamp
     
@@ -244,7 +244,7 @@ class Cfg:
                 self._read_io(cfg)
         else:
             raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), 
-                self.filepath)
+                                    self.filepath)
 
     def read(self, cfg_lines):
         """Read CFG-format data of a FileIO or StringIO object."""
@@ -302,8 +302,8 @@ class Cfg:
             a = float(a)
             b = _prevent_null(b, float, 0.0)
             skew = _prevent_null(skew, float, 0.0)
-            cmin = float(cmin)
-            cmax = float(cmax)
+            cmin = int(cmin)
+            cmax = int(cmax)
             primary = float(primary)
             secondary = float(secondary)
             self.analog_channels[ichn] = AnalogChannel(n, a, b, skew, 
@@ -797,7 +797,7 @@ class Channel:
 
 class StatusChannel(Channel):
     """Holds status channel description data."""
-    def __init__(self, n: int, name='', ph='', ccbm='', y=''):
+    def __init__(self, n: int, name='', ph='', ccbm='', y=0):
         """StatusChannel class constructor."""
         super().__init__(n, name, ph, ccbm)
         self.name = name
@@ -814,8 +814,8 @@ class StatusChannel(Channel):
 class AnalogChannel(Channel):
     """Holds analog channel description data."""
     def __init__(self, n: int, a: float, b=0.0, skew=0.0, cmin=-32767,
-                 cmax=32767, name='', uu='', ph='', ccbm='', primary=1,
-                 secondary=1, pors='P'):
+                 cmax=32767, name='', uu='', ph='', ccbm='', primary=1.0,
+                 secondary=1.0, pors='P'):
         """AnalogChannel class constructor."""
         super().__init__(n, name, ph, ccbm)
         self.name = name
