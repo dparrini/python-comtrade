@@ -21,7 +21,31 @@ Or just copy `comtrade.py` from this repository.
 
 ## How to Use
 
-The examples below shows how to open a CFF file or both CFG and DAT files to plot (using `pyplot`) analog channel oscillography.
+The examples below shows how to open both CFG and DAT files or the new CFF file to plot (using `pyplot`) analog channel oscillography.
+
+
+
+### CFG and DAT files (all revisions)
+
+Comtrade files separated in CFG and DAT formats can also be read with `Comtrade.load`. A `CFG` file path must be passed as an argument and, optionaly, a `DAT` file path too (if the file name is not equal of the CFG file).
+
+```py
+import matplotlib.pyplot as plt
+from comtrade import Comtrade
+
+rec = Comtrade()
+rec.load("sample_files/sample_ascii.cfg", "sample_files/sample_ascii.dat")
+print("Trigger time = {}s".format(rec.trigger_time))
+
+plt.figure()
+plt.plot(rec.time, rec.analog[0])
+plt.plot(rec.time, rec.analog[1])
+plt.legend([rec.analog_channel_ids[0], rec.analog_channel_ids[1]])
+plt.show()
+```
+
+Additional header (`*.hdr`) and information (`*.inf`) files are not supported.
+
 
 ### CFF files (2013 revision)
 
@@ -47,28 +71,6 @@ A `Comtrade` class must be instantiated and the method `load` called with the `C
 More information can be accessed through `Comtrade.cfg` object, which stores data such as detailed channel information.
 
 Data of additional sections, such as HDR and INF, can be accessed through `hdr` and `inf` properties, respectively.
-
-
-### CFG and DAT files (all revisions)
-
-Comtrade files separated in CFG and DAT formats can also be read with `Comtrade.load`. A `CFG` file path must be passed as an argument and, optionaly, a `DAT` file path too (if the file name is not equal of the CFG file).
-
-```py
-import matplotlib.pyplot as plt
-from comtrade import Comtrade
-
-rec = Comtrade()
-rec.load("sample_files/sample_ascii.cfg", "sample_files/sample_ascii.dat")
-print("Trigger time = {}s".format(rec.trigger_time))
-
-plt.figure()
-plt.plot(rec.time, rec.analog[0])
-plt.plot(rec.time, rec.analog[1])
-plt.legend([rec.analog_channel_ids[0], rec.analog_channel_ids[1]])
-plt.show()
-```
-
-Additional header (`*.hdr`) and information (`*.inf`) files are not supported.
 
 
 ## Features
