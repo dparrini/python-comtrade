@@ -21,6 +21,19 @@ ASCII
 1
 """
 
+COMTRADE_SAMPLE_1_CFG_LAZY = """,,1999
+2,1A,1D
+1,,,,A,2.762,0,0, -32768,32767,1,1,S
+1,,,,0
+60
+0
+0,2
+,
+
+ASCII
+1
+"""
+
 
 COMTRADE_SAMPLE_1_DAT = "1, 0, 0,0\n2,347,-1,1\n"
 
@@ -82,6 +95,51 @@ class TestCfg1Reading(unittest.TestCase):
 
     def test_time_base(self):
         self.assertEqual(self.comtrade.time_base, 
+                         self.comtrade.cfg.TIME_BASE_MICROSEC)
+
+    def test_ft(self):
+        self.assertEqual(self.comtrade.ft, "ASCII")
+
+
+class TestCfg1LazyReading(unittest.TestCase):
+    """String CFG and DAT 1999 pair test case, abusing missing values in CFG."""
+    def setUp(self):
+        self.comtrade = Comtrade(ignore_warnings=True)
+        self.comtrade.read(COMTRADE_SAMPLE_1_CFG_LAZY, COMTRADE_SAMPLE_1_DAT)
+
+    def test_station(self):
+        self.assertEqual(self.comtrade.station_name, "")
+
+    def test_rec_dev_id(self):
+        self.assertEqual(self.comtrade.rec_dev_id, "")
+
+    def test_rev_year(self):
+        self.assertEqual(self.comtrade.rev_year, "1999")
+
+    def test_1a(self):
+        self.assertEqual(self.comtrade.analog_count, 1)
+
+    def test_1d(self):
+        self.assertEqual(self.comtrade.status_count, 1)
+
+    def test_2c(self):
+        self.assertEqual(self.comtrade.channels_count, 2)
+
+    def test_frequency(self):
+        self.assertEqual(float(self.comtrade.frequency), 60.0)
+
+    def test_total_samples(self):
+        self.assertEqual(self.comtrade.total_samples, 2)
+
+    def test_timestamp(self):
+        self.assertEqual(self.comtrade.start_timestamp,
+                         dt.datetime(1, 1, 1, 0, 0, 0, 0, None))
+
+        self.assertEqual(self.comtrade.trigger_timestamp,
+                         dt.datetime(1, 1, 1, 0, 0, 0, 0, None))
+
+    def test_time_base(self):
+        self.assertEqual(self.comtrade.time_base,
                          self.comtrade.cfg.TIME_BASE_MICROSEC)
 
     def test_ft(self):

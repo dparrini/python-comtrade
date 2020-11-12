@@ -54,13 +54,17 @@ CFF_HEADER_REXP = "(?i)--- file type: ([a-z]+)(?:\\s([a-z]+))? ---$"
 SEPARATOR = ","
 
 # timestamp regular expression
-re_dt = re.compile("([0-9]{1,2})/([0-9]{1,2})/([0-9]{2,4}),([0-9]{2}):([0-9]{2}):([0-9]{2})\\.([0-9]{5,12})")
+re_date = re.compile("([0-9]{1,2})/([0-9]{1,2})/([0-9]{2,4})")
+re_time = re.compile("([0-9]{2}):([0-9]{2}):([0-9]{2})\\.([0-9]{5,12})")
+
 
 # Non-standard revision warning
 WARNING_UNKNOWN_REVISION = "Unknown standard revision \"{}\""
 # Date time with nanoseconds resolution warning
 WARNING_DATETIME_NANO = "Unsupported datetime objects with nanoseconds \
 resolution. Using truncated values."
+# Date time with year 0, month 0 and/or day 0.
+WARNING_MINDATE = "Missing date values. Using minimum values: {}."
 
 
 def _read_sep_values(line, expected: int = -1, default: str = ''):
@@ -78,29 +82,70 @@ def _prevent_null(str_value: str, value_type: type, default_value):
         return value_type(str_value)
 
 
-def _read_timestamp(timestamp: str, ignore_warnings=False) -> dt.datetime:
-    m = re_dt.match(timestamp)
-    day = int(m.group(1))
-    month = int(m.group(2))
-    year = int(m.group(3))
-    hour = int(m.group(4))
-    minute = int(m.group(5))
-    second = int(m.group(6))
-    frac_second = int(m.group(7))
-    in_nanoseconds = len(m.group(7)) > 6
+def _get_date(date_str: str) -> tuple:
+    m = re_date.match(date_str)
+    if m is not None:
+        day = int(m.group(1))
+        month = int(m.group(2))
+        year = int(m.group(3))
+        return day, month, year
+    return 0, 0, 0
 
-    # timezone information
+
+def _get_time(time_str: str, ignore_warnings: bool = False) -> tuple:
+    m = re_time.match(time_str)
+    if m is not None:
+        hour = int(m.group(1))
+        minute = int(m.group(2))
+        second = int(m.group(3))
+        fracsec_str = m.group(4)
+        frac_second = int(fracsec_str)
+        in_nanoseconds = len(fracsec_str) > 6
+        microsecond = frac_second
+
+        if in_nanoseconds:
+            # Nanoseconds resolution is not supported by datetime module, so it's
+            # converted to integer below.
+            if not ignore_warnings:
+                warnings.warn(Warning(WARNING_DATETIME_NANO))
+            microsecond = int(microsecond * 1E-3)
+        return hour, minute, second, microsecond, in_nanoseconds
+
+
+def _read_timestamp(timestamp_line: str, ignore_warnings=False) -> tuple:
+    """Process comma separated fields and returns a tuple containing the timestamp
+    and a boolean value indicating whether nanoseconds are used.
+    Can possibly return the timestamp 00/00/0000 00:00:00.000 for empty strings
+    or empty pairs."""
+    day, month, year, hour, minute, second, microsecond = (0,)*7
+    nanosec = False
+    if len(timestamp_line.strip()) > 0:
+        values = timestamp_line.split(",")
+        if len(values) >= 2:
+            date_str, time_str = values[0:2]
+            if len(date_str.strip()) > 0:
+                day, month, year = _get_date(date_str)
+            if len(time_str.strip()) > 0:
+                hour, minute, second, microsecond, \
+                    nanosec = _get_time(time_str, ignore_warnings)
+
+    using_min_data = False
+    if year <= 0:
+        year = dt.MINYEAR
+        using_min_data = True
+    if month <= 0:
+        month = 1
+        using_min_data = True
+    if day <= 0:
+        day = 1
+        using_min_data = True
+    # Timezone info unsupported
     tzinfo = None
-    microsecond = frac_second
-    if in_nanoseconds:
-        # Nanoseconds resolution is not supported by datetime module, so it's
-        # converted to integer below.
-        if not ignore_warnings:
-            warnings.warn(Warning(WARNING_DATETIME_NANO))
-        microsecond = int(microsecond * 1E-3)
-
-    return dt.datetime(year, month, day, hour, minute, second, 
-                       microsecond, tzinfo)
+    timestamp = dt.datetime(year, month, day, hour, minute, second,
+                            microsecond, tzinfo)
+    if not ignore_warnings and using_min_data:
+        warnings.warn(Warning(WARNING_MINDATE.format(str(timestamp))))
+    return timestamp, nanosec
 
 
 class Cfg:
@@ -372,15 +417,15 @@ class Cfg:
         # First data point time and time base
         line = cfg.readline()
         ts_str = line.strip()
-        self._start_timestamp = _read_timestamp(ts_str, self.ignore_warnings)
-        self._time_base = self._get_time_base(ts_str)
+        self._start_timestamp, nanosec = _read_timestamp(ts_str, self.ignore_warnings)
+        self._time_base = self._get_time_base(nanosec)
         line_count = line_count + 1
 
         # Event data point and time base
         line = cfg.readline()
         ts_str = line.strip()
-        self._trigger_timestamp = _read_timestamp(ts_str, self.ignore_warnings)
-        self._time_base = min([self.time_base, self._get_time_base(ts_str)])
+        self._trigger_timestamp, nanosec = _read_timestamp(ts_str, self.ignore_warnings)
+        self._time_base = min([self.time_base, self._get_time_base(nanosec)])
         line_count = line_count + 1
 
         # DAT file type
@@ -410,14 +455,12 @@ class Cfg:
                 self._tmq_code, self._leap_second = _read_sep_values(line)
                 line_count = line_count + 1
 
-    def _get_time_base(self, timestamp):
+    def _get_time_base(self, using_nanoseconds: bool):
         """
         Return the time base, which is based on the fractionary part of the 
         seconds in a timestamp (00.XXXXX).
         """
-        match = re_dt.match(timestamp)
-        in_nanoseconds = len(match.group(7)) > 6
-        if in_nanoseconds:
+        if using_nanoseconds:
             return self.TIME_BASE_NANOSEC
         else:
             return self.TIME_BASE_MICROSEC
