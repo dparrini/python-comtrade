@@ -25,7 +25,7 @@ COMTRADE_SAMPLE_1_CFG_LAZY = """,,1999
 2,1A,1D
 1,,,,A,2.762,0,0, -32768,32767,1,1,S
 1,,,,0
-60
+
 0
 0,2
 ,
@@ -126,7 +126,7 @@ class TestCfg1LazyReading(unittest.TestCase):
         self.assertEqual(self.comtrade.channels_count, 2)
 
     def test_frequency(self):
-        self.assertEqual(float(self.comtrade.frequency), 60.0)
+        self.assertEqual(float(self.comtrade.frequency), 0.0)
 
     def test_total_samples(self):
         self.assertEqual(self.comtrade.total_samples, 2)

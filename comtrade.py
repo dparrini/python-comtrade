@@ -175,7 +175,7 @@ class Cfg:
         self._status_channels = []
         self._analog_count = 0
         self._status_count = 0
-        self._frequency = 60.0
+        self._frequency = 0.0
         self._nrates = 1
         self._sample_rates = []
         self._timestamp_critical = False
@@ -391,7 +391,8 @@ class Cfg:
 
         # Frequency line
         line = cfg.readline()
-        self._frequency = float(line.strip())
+        if len(line.strip()) > 0:
+            self._frequency = float(line.strip())
         line_count = line_count + 1
 
         # Nrates line
