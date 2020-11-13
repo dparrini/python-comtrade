@@ -55,7 +55,7 @@ SEPARATOR = ","
 
 # timestamp regular expression
 re_date = re.compile("([0-9]{1,2})/([0-9]{1,2})/([0-9]{2,4})")
-re_time = re.compile("([0-9]{2}):([0-9]{2}):([0-9]{2})\\.([0-9]{5,12})")
+re_time = re.compile("([0-9]{2}):([0-9]{2}):([0-9]{2})(\\.([0-9]{1,12}))?")
 
 
 # Non-standard revision warning
@@ -98,7 +98,13 @@ def _get_time(time_str: str, ignore_warnings: bool = False) -> tuple:
         hour = int(m.group(1))
         minute = int(m.group(2))
         second = int(m.group(3))
-        fracsec_str = m.group(4)
+        fracsec_str = m.group(5)
+        # Pad fraction of seconds with 0s to the right
+        if len(fracsec_str) <= 6:
+            fracsec_str = fill_with_zeros_to_the_right(fracsec_str, 6)
+        else:
+            fracsec_str = fill_with_zeros_to_the_right(fracsec_str, 9)
+
         frac_second = int(fracsec_str)
         in_nanoseconds = len(fracsec_str) > 6
         microsecond = frac_second
@@ -110,6 +116,15 @@ def _get_time(time_str: str, ignore_warnings: bool = False) -> tuple:
                 warnings.warn(Warning(WARNING_DATETIME_NANO))
             microsecond = int(microsecond * 1E-3)
         return hour, minute, second, microsecond, in_nanoseconds
+
+
+def fill_with_zeros_to_the_right(number_str: str, width: int):
+    actual_len = len(number_str)
+    if actual_len < width:
+        difference = width - actual_len
+        fill_chars = "0"*difference
+        return number_str + fill_chars
+    return number_str
 
 
 def _read_timestamp(timestamp_line: str, ignore_warnings=False) -> tuple:
