@@ -400,7 +400,7 @@ class Cfg:
             n, name, ph, ccbm, y = packed
             # type conversion
             n = int(n)
-            y = int(y)
+            y = _prevent_null(y, int, 0)  # TODO: actually a critical data. In the future add a warning.
             self.status_channels[ichn] = StatusChannel(n, name, ph, ccbm, y)
             line_count = line_count + 1
 
