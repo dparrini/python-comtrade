@@ -384,8 +384,8 @@ class Cfg:
             a = float(a)
             b = _prevent_null(b, float, 0.0)
             skew = _prevent_null(skew, float, 0.0)
-            cmin = int(cmin)
-            cmax = int(cmax)
+            cmin = float(cmin)
+            cmax = float(cmax)
             primary = float(primary)
             secondary = float(secondary)
             self.analog_channels[ichn] = AnalogChannel(n, a, b, skew, 
