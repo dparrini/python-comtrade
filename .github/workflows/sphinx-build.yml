@@ -28,7 +28,7 @@ jobs:
         run: |
           # Only uses the latest version of 'comtrade' available from PyPI
           pip install comtrade
-          sphinx-build -M html source docs
+          sphinx-build -M html docsource docs
 
       # https://github.com/marketplace/actions/github-pages
       #- if: success()
