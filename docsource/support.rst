@@ -1,11 +1,3 @@
-Supporting Module Classes
-=========================
-
-The following classes are used to support the primary classes in parsing
-and describing COMTRADE files.
-
-
-
 Channels API Reference
 ======================
 
