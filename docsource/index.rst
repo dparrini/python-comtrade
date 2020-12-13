@@ -1,4 +1,15 @@
-.. pycev documentation master file
+.. python-comtrade documentation master file
+
+API Documentation
+=================
+
+.. toctree::
+   :maxdepth: 1
+   
+   comtrade
+   channels
+   datareaders
+
 
 
 .. mdinclude:: ../README.md
