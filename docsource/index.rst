@@ -8,7 +8,7 @@ API Documentation
    
    comtrade
    channels
-   datareaders
+   datreaders
 
 
 
