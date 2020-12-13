@@ -247,6 +247,24 @@ class TestCfg2Reading(TestCffReading):
         self.assertIsNone(self.comtrade.inf)
 
 
+class TestCfgAsciiEncodingReading(TestCffReading):
+    """CFG and DAT 2013 file pair test case (same content as the CFF test), but
+    this time with the file using ASCII text encoding.
+    """
+    def setUp(self):
+        self.comtrade = Comtrade(ignore_warnings=True)
+        self.comtrade.load("tests/sample_files/sample_ascii_utf-8.cfg", "tests/sample_files/sample_ascii.dat")
+
+    def test_hdr(self):
+        self.assertIsNone(self.comtrade.hdr)
+
+    def test_inf(self):
+        self.assertIsNone(self.comtrade.inf)
+
+    def test_station(self):
+        self.assertEqual(self.comtrade.station_name, "SMARTSTATION testing text encoding: hgvcj터파크387")
+
+
 class TestBinaryReading(unittest.TestCase):
     dat_format = comtrade.TYPE_BINARY
     filename = "temp_binary"

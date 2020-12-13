@@ -322,7 +322,7 @@ class Cfg:
         self.filepath = filepath
 
         if os.path.isfile(self.filepath):
-            with open(self.filepath, "r") as cfg:
+            with open(self.filepath, "r", encoding='utf-8') as cfg:
                 self._read_io(cfg)
         else:
             raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), 
@@ -782,7 +782,7 @@ class Comtrade:
 
     def _load_inf(self, inf_file):
         if os.path.exists(inf_file):
-            with open(inf_file, 'r') as file:
+            with open(inf_file, 'r', encoding='utf-8') as file:
                 self._inf = file.read()
                 if len(self._inf) == 0:
                     self._inf = None
@@ -791,7 +791,7 @@ class Comtrade:
 
     def _load_hdr(self, hdr_file):
         if os.path.exists(hdr_file):
-            with open(hdr_file, 'r') as file:
+            with open(hdr_file, 'r', encoding='utf-8') as file:
                 self._hdr = file.read()
                 if len(self._hdr) == 0:
                     self._hdr = None
@@ -804,7 +804,7 @@ class Comtrade:
         dat_lines = []
         hdr_lines = []
         inf_lines = []
-        with open(cff_file_path, "r") as file:
+        with open(cff_file_path, "r", encoding='utf-8') as file:
             line_number = 0
             # file type: CFG, HDR, INF, DAT
             ftype = None
@@ -949,8 +949,13 @@ class DatReader:
             # extract CFG file information regarding data dimensions
             self._cfg = cfg
             self._preallocate()
-            with open(self.file_path, self.read_mode) as contents:
-                self.parse(contents)
+            if self.read_mode == 'r':
+                with open(self.file_path, self.read_mode, encoding='utf-8') as contents:
+                    self.parse(contents)
+            else:
+                # Probably binary reading
+                with open(self.file_path, self.read_mode) as contents:
+                    self.parse(contents)
         else:
             raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT),
                                     self.file_path)
