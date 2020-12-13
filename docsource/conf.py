@@ -40,6 +40,7 @@ extensions = [  'sphinx.ext.autodoc',
                 'sphinx.ext.autosummary',
                 'numpydoc',
                 'sphinx_sitemap',
+                'm2r2',
 ]
 autosummary_generate = True
 numpydoc_show_class_members = True

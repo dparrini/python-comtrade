@@ -1,5 +1,5 @@
 wheel
 sphinx
-pyserial
+m2r2
 numpydoc
 sphinx-sitemap
