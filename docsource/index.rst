@@ -7,8 +7,7 @@ API Documentation
    :maxdepth: 1
    
    comtrade
-   channels
-   datreaders
+   support
 
 
 
