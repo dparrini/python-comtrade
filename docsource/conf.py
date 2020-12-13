@@ -60,7 +60,7 @@ exclude_patterns = []
 # a list of builtin themes.
 #
 html_theme = 'classic'
-html_title = 'python-comtrade`'
+html_title = 'python-comtrade'
 # html_theme_options = {
     # 'rightsidebar':     'false',
     # 'stickysidebar':    'false',
