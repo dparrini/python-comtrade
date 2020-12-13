@@ -1,5 +1,5 @@
-Channels API Reference
-======================
+Channel Object References
+=========================
 
 .. autoclass:: comtrade.Channel
    :members:
@@ -11,8 +11,8 @@ Channels API Reference
    :members:
 
 
-DatReaders API Reference
-========================
+DatReader Object Reference
+==========================
 
 .. autoclass:: comtrade.DatReader
    :members:

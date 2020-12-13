@@ -1,7 +1,7 @@
 .. python-comtrade documentation master file
 
-API Documentation
-=================
+Module Documentation
+====================
 
 .. toctree::
    :maxdepth: 1
