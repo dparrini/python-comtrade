@@ -273,7 +273,10 @@ class TestBinaryReading(unittest.TestCase):
         return int(analog_value)
 
     def getFormat(self):
-        return 'Lf h H'
+        if struct.calcsize("L") == 4:
+            return 'Lf h H'
+        else:
+            return 'If h H'
 
     def setUp(self):
         # Sample auto-generated Comtrade file.
@@ -365,7 +368,10 @@ class TestBinary32Reading(TestBinaryReading):
         return int(analog_value)
 
     def getFormat(self):
-        return 'Lf l H'
+        if struct.calcsize("L") == 4:
+            return 'Lf l H'
+        else:
+            return 'If i H'
 
 
 class TestFloat32Reading(TestBinaryReading):
@@ -376,7 +382,10 @@ class TestFloat32Reading(TestBinaryReading):
         return int(analog_value)
 
     def getFormat(self):
-        return 'Lf f H'
+        if struct.calcsize("L") == 4:
+            return 'Lf f H'
+        else:
+            return 'If f H'
 
 
 class TestRealBinaryReading(unittest.TestCase):
