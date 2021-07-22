@@ -1025,9 +1025,9 @@ class AsciiDatReader(DatReader):
     def __init__(self):
         # Call the initialization for the inherited class
         super().__init__()
-        ASCII_SEPARATOR = SEPARATOR
+        self.ASCII_SEPARATOR = SEPARATOR
 
-        DATA_MISSING = ""
+        self.DATA_MISSING = ""
 
     def parse(self, contents):
         """Parse a ASCII file contents."""
