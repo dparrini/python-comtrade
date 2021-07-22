@@ -1184,21 +1184,35 @@ class BinaryDatReader(DatReader):
 
 class Binary32DatReader(BinaryDatReader):
     """32-bit binary format DatReader subclass."""
-    ANALOG_BYTES = 4
+    def __init__(self):
+        # Call the initialization for the inherited class
+        super().__init__()
+        self.ANALOG_BYTES = 4
 
-    STRUCT_FORMAT = "LL {acount:d}l {dcount:d}H"
-    STRUCT_FORMAT_ANALOG_ONLY = "LL {acount:d}l"
+        if struct.calcsize("L") == 4:
+            self.STRUCT_FORMAT = "LL {acount:d}l {dcount:d}H"
+            self.STRUCT_FORMAT_ANALOG_ONLY = "LL {acount:d}l"
+        else:
+            self.STRUCT_FORMAT = "II {acount:d}i {dcount:d}H"
+            self.STRUCT_FORMAT_ANALOG_ONLY = "II {acount:d}i"
 
-    # maximum negative value
-    DATA_MISSING = 0xFFFFFFFF
+        # maximum negative value
+        self.DATA_MISSING = 0xFFFFFFFF
 
 
 class Float32DatReader(BinaryDatReader):
     """Single precision (float) binary format DatReader subclass."""
-    ANALOG_BYTES = 4
+    def __init__(self):
+        # Call the initialization for the inherited class
+        super().__init__()
+        self.ANALOG_BYTES = 4
 
-    STRUCT_FORMAT = "LL {acount:d}f {dcount:d}H"
-    STRUCT_FORMAT_ANALOG_ONLY = "LL {acount:d}f"
+        if struct.calcsize("L") == 4:
+            self.STRUCT_FORMAT = "LL {acount:d}f {dcount:d}H"
+            self.STRUCT_FORMAT_ANALOG_ONLY = "LL {acount:d}f"
+        else:
+            self.STRUCT_FORMAT = "II {acount:d}f {dcount:d}H"
+            self.STRUCT_FORMAT_ANALOG_ONLY = "II {acount:d}f"
 
-    # Maximum negative value
-    DATA_MISSING = sys.float_info.min
+        # Maximum negative value
+        self.DATA_MISSING = sys.float_info.min
