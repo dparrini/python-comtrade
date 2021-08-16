@@ -55,7 +55,7 @@ SEPARATOR = ","
 
 # timestamp regular expression
 re_date = re.compile("([0-9]{1,2})/([0-9]{1,2})/([0-9]{2,4})")
-re_time = re.compile("([0-9]{2}):([0-9]{2}):([0-9]{2})(\\.([0-9]{1,12}))?")
+re_time = re.compile("([0-9]{1,2}):([0-9]{2}):([0-9]{2})(\\.([0-9]{1,12}))?")
 
 
 # Non-standard revision warning
@@ -1022,9 +1022,12 @@ class DatReader:
 
 class AsciiDatReader(DatReader):
     """ASCII format DatReader subclass."""
-    ASCII_SEPARATOR = SEPARATOR
+    def __init__(self):
+        # Call the initialization for the inherited class
+        super().__init__()
+        self.ASCII_SEPARATOR = SEPARATOR
 
-    DATA_MISSING = ""
+        self.DATA_MISSING = ""
 
     def parse(self, contents):
         """Parse a ASCII file contents."""
@@ -1067,24 +1070,27 @@ class AsciiDatReader(DatReader):
 
 class BinaryDatReader(DatReader):
     """16-bit binary format DatReader subclass."""
-    ANALOG_BYTES = 2
-    STATUS_BYTES = 2
-    TIME_BYTES = 4
-    SAMPLE_NUMBER_BYTES = 4
+    def __init__(self):
+        # Call the initialization for the inherited class
+        super().__init__()
+        self.ANALOG_BYTES = 2
+        self.STATUS_BYTES = 2
+        self.TIME_BYTES = 4
+        self.SAMPLE_NUMBER_BYTES = 4
 
-    # maximum negative value
-    DATA_MISSING = 0xFFFF
+        # maximum negative value
+        self.DATA_MISSING = 0xFFFF
 
-    read_mode = "rb"
+        self.read_mode = "rb"
 
-    if struct.calcsize("L") == 4:
-        STRUCT_FORMAT = "LL {acount:d}h {dcount:d}H"
-        STRUCT_FORMAT_ANALOG_ONLY = "LL {acount:d}h"
-        STRUCT_FORMAT_STATUS_ONLY = "LL {dcount:d}H"
-    else:
-        STRUCT_FORMAT = "II {acount:d}h {dcount:d}H"
-        STRUCT_FORMAT_ANALOG_ONLY = "II {acount:d}h"
-        STRUCT_FORMAT_STATUS_ONLY = "II {dcount:d}H"
+        if struct.calcsize("L") == 4:
+            self.STRUCT_FORMAT = "LL {acount:d}h {dcount:d}H"
+            self.STRUCT_FORMAT_ANALOG_ONLY = "LL {acount:d}h"
+            self.STRUCT_FORMAT_STATUS_ONLY = "LL {dcount:d}H"
+        else:
+            self.STRUCT_FORMAT = "II {acount:d}h {dcount:d}H"
+            self.STRUCT_FORMAT_ANALOG_ONLY = "II {acount:d}h"
+            self.STRUCT_FORMAT_STATUS_ONLY = "II {dcount:d}H"
 
     def get_reader_format(self, analog_channels, status_bytes):
         # Number of status fields of 2 bytes based on the total number of 
@@ -1178,21 +1184,35 @@ class BinaryDatReader(DatReader):
 
 class Binary32DatReader(BinaryDatReader):
     """32-bit binary format DatReader subclass."""
-    ANALOG_BYTES = 4
+    def __init__(self):
+        # Call the initialization for the inherited class
+        super().__init__()
+        self.ANALOG_BYTES = 4
 
-    STRUCT_FORMAT = "LL {acount:d}l {dcount:d}H"
-    STRUCT_FORMAT_ANALOG_ONLY = "LL {acount:d}l"
+        if struct.calcsize("L") == 4:
+            self.STRUCT_FORMAT = "LL {acount:d}l {dcount:d}H"
+            self.STRUCT_FORMAT_ANALOG_ONLY = "LL {acount:d}l"
+        else:
+            self.STRUCT_FORMAT = "II {acount:d}i {dcount:d}H"
+            self.STRUCT_FORMAT_ANALOG_ONLY = "II {acount:d}i"
 
-    # maximum negative value
-    DATA_MISSING = 0xFFFFFFFF
+        # maximum negative value
+        self.DATA_MISSING = 0xFFFFFFFF
 
 
 class Float32DatReader(BinaryDatReader):
     """Single precision (float) binary format DatReader subclass."""
-    ANALOG_BYTES = 4
+    def __init__(self):
+        # Call the initialization for the inherited class
+        super().__init__()
+        self.ANALOG_BYTES = 4
 
-    STRUCT_FORMAT = "LL {acount:d}f {dcount:d}H"
-    STRUCT_FORMAT_ANALOG_ONLY = "LL {acount:d}f"
+        if struct.calcsize("L") == 4:
+            self.STRUCT_FORMAT = "LL {acount:d}f {dcount:d}H"
+            self.STRUCT_FORMAT_ANALOG_ONLY = "LL {acount:d}f"
+        else:
+            self.STRUCT_FORMAT = "II {acount:d}f {dcount:d}H"
+            self.STRUCT_FORMAT_ANALOG_ONLY = "II {acount:d}f"
 
-    # Maximum negative value
-    DATA_MISSING = sys.float_info.min
+        # Maximum negative value
+        self.DATA_MISSING = sys.float_info.min
