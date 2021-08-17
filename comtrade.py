@@ -55,7 +55,7 @@ SEPARATOR = ","
 
 # timestamp regular expression
 re_date = re.compile("([0-9]{1,2})/([0-9]{1,2})/([0-9]{2,4})")
-re_time = re.compile("([0-9]{1,2}):([0-9]{2}):([0-9]{2})(\\.([0-9]{1,12}))?")
+re_time = re.compile("[\s]*([0-9]{1,2}):([0-9]{2}):([0-9]{2})(\\.([0-9]{1,12}))?")
 
 
 # Non-standard revision warning
