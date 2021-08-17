@@ -68,7 +68,7 @@ WARNING_MINDATE = "Missing date values. Using minimum values: {}."
 
 
 def _read_sep_values(line, expected: int = -1, default: str = ''):
-    values = line.strip().split(SEPARATOR)
+    values = tuple(map(lambda cell: cell.strip(), line.split(SEPARATOR)))
     if expected == -1 or len(values) == expected:
         return values
     return [values[i] if i < len(values) else default
@@ -135,7 +135,7 @@ def _read_timestamp(timestamp_line: str, ignore_warnings=False) -> tuple:
     day, month, year, hour, minute, second, microsecond = (0,)*7
     nanosec = False
     if len(timestamp_line.strip()) > 0:
-        values = timestamp_line.split(",")
+        values = _read_sep_values(timestamp_line, 2)
         if len(values) >= 2:
             date_str, time_str = values[0:2]
             if len(date_str.strip()) > 0:
