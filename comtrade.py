@@ -48,14 +48,14 @@ TYPE_FLOAT32 = "FLOAT32"
 TIMESTAMP_MISSING = 0xFFFFFFFF
 
 # CFF headers
-CFF_HEADER_REXP = "(?i)--- file type: ([a-z]+)(?:\\s([a-z]+))? ---$"
+CFF_HEADER_REXP = r"(?i)--- file type: ([a-z]+)(?:\s+([a-z0-9]+)(?:\s*\:\s*([0-9]+))?)? ---$"
 
 # common separator character of data fields of CFG and ASCII DAT files
 SEPARATOR = ","
 
 # timestamp regular expression
-re_date = re.compile("([0-9]{1,2})/([0-9]{1,2})/([0-9]{2,4})")
-re_time = re.compile("([0-9]{1,2}):([0-9]{2}):([0-9]{2})(\\.([0-9]{1,12}))?")
+re_date = re.compile(r"([0-9]{1,2})/([0-9]{1,2})/([0-9]{2,4})")
+re_time = re.compile(r"([0-9]{1,2}):([0-9]{2}):([0-9]{2})(\.([0-9]{1,12}))?")
 
 
 # Non-standard revision warning
@@ -529,7 +529,7 @@ class Comtrade:
     def station_name(self) -> str:
         """Return the recording device's station name."""
         return self._cfg.station_name
-    
+
     @property
     def rec_dev_id(self) -> str:
         """Return the recording device id."""
@@ -683,7 +683,7 @@ class Comtrade:
             raise Exception("Not supported data file format: {}".format(self.ft))
         return dat
 
-    def read(self, cfg_lines, dat_lines) -> None:
+    def read(self, cfg_lines, dat_lines_or_bytes) -> None:
         """
         Read CFG and DAT files contents. Expects FileIO or StringIO objects.
         """
@@ -696,7 +696,7 @@ class Comtrade:
         self._cfg_extract_phases(self._cfg)
 
         dat = self._get_dat_reader()
-        dat.read(dat_lines, self._cfg)
+        dat.read(dat_lines_or_bytes, self._cfg)
 
         # copy dat object information
         self._dat_extract_data(dat)
@@ -804,35 +804,57 @@ class Comtrade:
         dat_lines = []
         hdr_lines = []
         inf_lines = []
-        with open(cff_file_path, "r", encoding='utf-8') as file:
-            line_number = 0
-            # file type: CFG, HDR, INF, DAT
-            ftype = None
-            # file format: ASCII, BINARY, BINARY32, FLOAT32
-            fformat = None
+        # file type: CFG, HDR, INF, DAT
+        ftype = None
+        # file format: ASCII, BINARY, BINARY32, FLOAT32
+        fformat = None
+        # Number of bytes for binary/float dat
+        fbytes = 0
+        with open(cff_file_path, "r") as file:
             header_re = re.compile(CFF_HEADER_REXP)
             last_match = None
-            for line in file:
+            line_number = 0
+            line = file.readline()
+            while line != "":
+                line_number += 1
                 mobj = header_re.match(line.strip().upper())
                 if mobj is not None:
                     last_match = mobj
-                    ftype   = last_match.groups()[0]
-                    fformat = last_match.groups()[1]
-                    continue
-                if last_match is not None and ftype == "CFG":
+                    groups = last_match.groups()
+                    ftype   = groups[0]
+                    if len(groups) > 1:
+                        fformat = last_match.groups()[1]
+                        fbytes_obj = last_match.groups()[2]
+                        fbytes  = int(fbytes_obj) if fbytes_obj is not None else 0
+
+                elif last_match is not None and ftype == "CFG":
                     cfg_lines.append(line.strip())
 
-                if last_match is not None and ftype == "DAT":
-                    dat_lines.append(line.strip())
+                elif last_match is not None and ftype == "DAT":
+                    if fformat == TYPE_ASCII:
+                        dat_lines.append(line.strip())
+                    else:
+                        break
 
-                if last_match is not None and ftype == "HDR":
+                elif last_match is not None and ftype == "HDR":
                     hdr_lines.append(line.strip())
 
-                if last_match is not None and ftype == "INF":
+                elif last_match is not None and ftype == "INF":
                     inf_lines.append(line.strip())
-        
-        # process CFF data
-        self.read("\n".join(cfg_lines), "\n".join(dat_lines))
+
+                line = file.readline()
+
+        if fformat == TYPE_ASCII:
+            # process ASCII CFF data
+            self.read("\n".join(cfg_lines), "\n".join(dat_lines))
+        else:
+            # read dat bytes
+            total_bytes = os.path.getsize(cff_file_path)
+            cff_bytes_read = total_bytes - fbytes
+            with open(cff_file_path, "rb") as file:
+                file.read(cff_bytes_read)
+                dat_bytes = file.read(fbytes)
+            self.read("\n".join(cfg_lines), dat_bytes)
 
         # stores additional data
         self._hdr = "\n".join(hdr_lines)
@@ -1131,7 +1153,10 @@ class BinaryDatReader(DatReader):
         # Row reading function.
         next_row = None
         if isinstance(contents, io.TextIOBase) or \
-                isinstance(contents, io.BufferedIOBase):
+                isinstance(contents, io.BufferedIOBase) or \
+                isinstance(contents, bytes):
+            if isinstance(contents, bytes):
+                contents = io.BytesIO(contents)
             def next_row(offset: int):
                 return contents.read(bytes_per_row)
 
