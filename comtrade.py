@@ -163,6 +163,21 @@ def _read_timestamp(timestamp_line: str, ignore_warnings=False) -> tuple:
     return timestamp, nanosec
 
 
+def _file_is_utf8(file_path):
+    if os.path.exists(file_path):
+        with open(file_path, "r") as file:
+            return _stream_is_utf8(file)
+    return False
+
+
+def _stream_is_utf8(stream):
+    try:
+        contents = stream.readlines()
+    except UnicodeDecodeError as exception:
+        return True
+    return False
+
+
 class Cfg:
     """Parses and stores Comtrade's CFG data."""
     # time base units
@@ -322,7 +337,10 @@ class Cfg:
         self.filepath = filepath
 
         if os.path.isfile(self.filepath):
-            with open(self.filepath, "r", encoding='utf-8') as cfg:
+            kwargs = {}
+            if _file_is_utf8(self.filepath):
+                kwargs["encoding"] = "utf-8"
+            with open(self.filepath, "r", **kwargs) as cfg:
                 self._read_io(cfg)
         else:
             raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), 
@@ -782,7 +800,10 @@ class Comtrade:
 
     def _load_inf(self, inf_file):
         if os.path.exists(inf_file):
-            with open(inf_file, 'r', encoding='utf-8') as file:
+            kwargs = {}
+            if _file_is_utf8(self.file_path):
+                kwargs["encoding"] = "utf-8"
+            with open(inf_file, 'r', **kwargs) as file:
                 self._inf = file.read()
                 if len(self._inf) == 0:
                     self._inf = None
@@ -791,7 +812,10 @@ class Comtrade:
 
     def _load_hdr(self, hdr_file):
         if os.path.exists(hdr_file):
-            with open(hdr_file, 'r', encoding='utf-8') as file:
+            kwargs = {}
+            if _file_is_utf8(self.file_path):
+                kwargs["encoding"] = "utf-8"
+            with open(hdr_file, 'r', **kwargs) as file:
                 self._hdr = file.read()
                 if len(self._hdr) == 0:
                     self._hdr = None
@@ -971,13 +995,8 @@ class DatReader:
             # extract CFG file information regarding data dimensions
             self._cfg = cfg
             self._preallocate()
-            if self.read_mode == 'r':
-                with open(self.file_path, self.read_mode, encoding='utf-8') as contents:
-                    self.parse(contents)
-            else:
-                # Probably binary reading
-                with open(self.file_path, self.read_mode) as contents:
-                    self.parse(contents)
+            with open(self.file_path, self.read_mode) as contents:
+                self.parse(contents)
         else:
             raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT),
                                     self.file_path)

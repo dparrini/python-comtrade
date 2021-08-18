@@ -412,5 +412,11 @@ class TestRealBinaryReading(unittest.TestCase):
         self.assertAlmostEqual(1.0 / sample_rate, time_diff)
 
 
+class TestEncodingHandling(unittest.TestCase):
+    def test_test_function(self):
+        self.assertTrue(comtrade._file_is_utf8("tests/sample_files/sample_ascii_utf-8.cfg"))
+        self.assertFalse(comtrade._file_is_utf8("tests/sample_files/sample_ascii.cfg"))
+
+
 if __name__ == "__main__":
     unittest.main()
