@@ -518,7 +518,7 @@ class Comtrade:
         ignore_warnings -- whether warnings are displayed in stdout 
             (default: False).
         """
-        self.filename = ""
+        self.file_path = ""
 
         self._cfg = Cfg(**kwargs)
 
@@ -907,6 +907,7 @@ class Comtrade:
                                           self._cfg.timemult))
         lines.append(format_line.format(self.ft))
         return "\n".join(lines)
+
 
 
 class Channel:
