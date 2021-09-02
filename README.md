@@ -122,6 +122,20 @@ https://github.com/dparrini/python-comtrade
 
 Feel free to report any bugs you find. You are welcome to fork and submit pull requests.
 
+## Development
+
+To run tests, use Python's `unittest`. From a clone of the GitHub repository, run the command:
+
+#### On Windows
+```
+python -m unittest tests\tests.py
+```
+
+#### On Linux:
+```
+python3 -m unittest ./tests/tests.py
+```
+
 ## License
 
 The module is available at [GitHub](https://github.com/dparrini/python-comtrade) under the MIT license.
