@@ -15,8 +15,8 @@ COMTRADE_SAMPLE_1_CFG = """STATION_NAME,EQUIPMENT,2001
 60
 0
 0,2
-01/01/2000,10:30:00.228000
-01/01/2000,10:30:00.722000
+01/01/2000, 10:30:00.228000
+ 01/01/2000,10:30:00.722000
 ASCII
 1
 """
@@ -273,7 +273,10 @@ class TestBinaryReading(unittest.TestCase):
         return int(analog_value)
 
     def getFormat(self):
-        return 'Lf h H'
+        if struct.calcsize("L") == 4:
+            return 'Lf h H'
+        else:
+            return 'If h H'
 
     def setUp(self):
         # Sample auto-generated Comtrade file.
@@ -365,7 +368,10 @@ class TestBinary32Reading(TestBinaryReading):
         return int(analog_value)
 
     def getFormat(self):
-        return 'Lf l H'
+        if struct.calcsize("L") == 4:
+            return 'Lf l H'
+        else:
+            return 'If i H'
 
 
 class TestFloat32Reading(TestBinaryReading):
@@ -376,7 +382,10 @@ class TestFloat32Reading(TestBinaryReading):
         return int(analog_value)
 
     def getFormat(self):
-        return 'Lf f H'
+        if struct.calcsize("L") == 4:
+            return 'Lf f H'
+        else:
+            return 'If f H'
 
 
 class TestRealBinaryReading(unittest.TestCase):
@@ -401,6 +410,12 @@ class TestRealBinaryReading(unittest.TestCase):
         time_diff = self.comtrade.time[2] - self.comtrade.time[1]
         sample_rate = self.comtrade.cfg.sample_rates[0][0]
         self.assertAlmostEqual(1.0 / sample_rate, time_diff)
+
+
+class TestEncodingHandling(unittest.TestCase):
+    def test_test_function(self):
+        self.assertTrue(comtrade._file_is_utf8("tests/sample_files/sample_ascii_utf-8.cfg"))
+        self.assertFalse(comtrade._file_is_utf8("tests/sample_files/sample_ascii.cfg"))
 
 
 if __name__ == "__main__":

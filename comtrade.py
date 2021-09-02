@@ -48,14 +48,14 @@ TYPE_FLOAT32 = "FLOAT32"
 TIMESTAMP_MISSING = 0xFFFFFFFF
 
 # CFF headers
-CFF_HEADER_REXP = "(?i)--- file type: ([a-z]+)(?:\\s([a-z]+))? ---$"
+CFF_HEADER_REXP = r"(?i)--- file type: ([a-z]+)(?:\s+([a-z0-9]+)(?:\s*\:\s*([0-9]+))?)? ---$"
 
 # common separator character of data fields of CFG and ASCII DAT files
 SEPARATOR = ","
 
 # timestamp regular expression
-re_date = re.compile("([0-9]{1,2})/([0-9]{1,2})/([0-9]{2,4})")
-re_time = re.compile("([0-9]{2}):([0-9]{2}):([0-9]{2})(\\.([0-9]{1,12}))?")
+re_date = re.compile(r"([0-9]{1,2})/([0-9]{1,2})/([0-9]{2,4})")
+re_time = re.compile(r"([0-9]{1,2}):([0-9]{2}):([0-9]{2})(\.([0-9]{1,12}))?")
 
 
 # Non-standard revision warning
@@ -68,7 +68,7 @@ WARNING_MINDATE = "Missing date values. Using minimum values: {}."
 
 
 def _read_sep_values(line, expected: int = -1, default: str = ''):
-    values = line.strip().split(SEPARATOR)
+    values = tuple(map(lambda cell: cell.strip(), line.split(SEPARATOR)))
     if expected == -1 or len(values) == expected:
         return values
     return [values[i] if i < len(values) else default
@@ -135,7 +135,7 @@ def _read_timestamp(timestamp_line: str, ignore_warnings=False) -> tuple:
     day, month, year, hour, minute, second, microsecond = (0,)*7
     nanosec = False
     if len(timestamp_line.strip()) > 0:
-        values = timestamp_line.split(",")
+        values = _read_sep_values(timestamp_line, 2)
         if len(values) >= 2:
             date_str, time_str = values[0:2]
             if len(date_str.strip()) > 0:
@@ -161,6 +161,21 @@ def _read_timestamp(timestamp_line: str, ignore_warnings=False) -> tuple:
     if not ignore_warnings and using_min_data:
         warnings.warn(Warning(WARNING_MINDATE.format(str(timestamp))))
     return timestamp, nanosec
+
+
+def _file_is_utf8(file_path):
+    if os.path.exists(file_path):
+        with open(file_path, "r") as file:
+            return _stream_is_utf8(file)
+    return False
+
+
+def _stream_is_utf8(stream):
+    try:
+        contents = stream.readlines()
+    except UnicodeDecodeError as exception:
+        return True
+    return False
 
 
 class Cfg:
@@ -322,7 +337,10 @@ class Cfg:
         self.filepath = filepath
 
         if os.path.isfile(self.filepath):
-            with open(self.filepath, "r", encoding='utf-8') as cfg:
+            kwargs = {}
+            if _file_is_utf8(self.filepath):
+                kwargs["encoding"] = "utf-8"
+            with open(self.filepath, "r", **kwargs) as cfg:
                 self._read_io(cfg)
         else:
             raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), 
@@ -500,7 +518,7 @@ class Comtrade:
         ignore_warnings -- whether warnings are displayed in stdout 
             (default: False).
         """
-        self.filename = ""
+        self.file_path = ""
 
         self._cfg = Cfg(**kwargs)
 
@@ -529,7 +547,7 @@ class Comtrade:
     def station_name(self) -> str:
         """Return the recording device's station name."""
         return self._cfg.station_name
-    
+
     @property
     def rec_dev_id(self) -> str:
         """Return the recording device id."""
@@ -683,7 +701,7 @@ class Comtrade:
             raise Exception("Not supported data file format: {}".format(self.ft))
         return dat
 
-    def read(self, cfg_lines, dat_lines) -> None:
+    def read(self, cfg_lines, dat_lines_or_bytes) -> None:
         """
         Read CFG and DAT files contents. Expects FileIO or StringIO objects.
         """
@@ -696,7 +714,7 @@ class Comtrade:
         self._cfg_extract_phases(self._cfg)
 
         dat = self._get_dat_reader()
-        dat.read(dat_lines, self._cfg)
+        dat.read(dat_lines_or_bytes, self._cfg)
 
         # copy dat object information
         self._dat_extract_data(dat)
@@ -782,7 +800,10 @@ class Comtrade:
 
     def _load_inf(self, inf_file):
         if os.path.exists(inf_file):
-            with open(inf_file, 'r', encoding='utf-8') as file:
+            kwargs = {}
+            if _file_is_utf8(self.file_path):
+                kwargs["encoding"] = "utf-8"
+            with open(inf_file, 'r', **kwargs) as file:
                 self._inf = file.read()
                 if len(self._inf) == 0:
                     self._inf = None
@@ -791,7 +812,10 @@ class Comtrade:
 
     def _load_hdr(self, hdr_file):
         if os.path.exists(hdr_file):
-            with open(hdr_file, 'r', encoding='utf-8') as file:
+            kwargs = {}
+            if _file_is_utf8(self.file_path):
+                kwargs["encoding"] = "utf-8"
+            with open(hdr_file, 'r', **kwargs) as file:
                 self._hdr = file.read()
                 if len(self._hdr) == 0:
                     self._hdr = None
@@ -804,35 +828,57 @@ class Comtrade:
         dat_lines = []
         hdr_lines = []
         inf_lines = []
-        with open(cff_file_path, "r", encoding='utf-8') as file:
-            line_number = 0
-            # file type: CFG, HDR, INF, DAT
-            ftype = None
-            # file format: ASCII, BINARY, BINARY32, FLOAT32
-            fformat = None
+        # file type: CFG, HDR, INF, DAT
+        ftype = None
+        # file format: ASCII, BINARY, BINARY32, FLOAT32
+        fformat = None
+        # Number of bytes for binary/float dat
+        fbytes = 0
+        with open(cff_file_path, "r") as file:
             header_re = re.compile(CFF_HEADER_REXP)
             last_match = None
-            for line in file:
+            line_number = 0
+            line = file.readline()
+            while line != "":
+                line_number += 1
                 mobj = header_re.match(line.strip().upper())
                 if mobj is not None:
                     last_match = mobj
-                    ftype   = last_match.groups()[0]
-                    fformat = last_match.groups()[1]
-                    continue
-                if last_match is not None and ftype == "CFG":
+                    groups = last_match.groups()
+                    ftype   = groups[0]
+                    if len(groups) > 1:
+                        fformat = last_match.groups()[1]
+                        fbytes_obj = last_match.groups()[2]
+                        fbytes  = int(fbytes_obj) if fbytes_obj is not None else 0
+
+                elif last_match is not None and ftype == "CFG":
                     cfg_lines.append(line.strip())
 
-                if last_match is not None and ftype == "DAT":
-                    dat_lines.append(line.strip())
+                elif last_match is not None and ftype == "DAT":
+                    if fformat == TYPE_ASCII:
+                        dat_lines.append(line.strip())
+                    else:
+                        break
 
-                if last_match is not None and ftype == "HDR":
+                elif last_match is not None and ftype == "HDR":
                     hdr_lines.append(line.strip())
 
-                if last_match is not None and ftype == "INF":
+                elif last_match is not None and ftype == "INF":
                     inf_lines.append(line.strip())
-        
-        # process CFF data
-        self.read("\n".join(cfg_lines), "\n".join(dat_lines))
+
+                line = file.readline()
+
+        if fformat == TYPE_ASCII:
+            # process ASCII CFF data
+            self.read("\n".join(cfg_lines), "\n".join(dat_lines))
+        else:
+            # read dat bytes
+            total_bytes = os.path.getsize(cff_file_path)
+            cff_bytes_read = total_bytes - fbytes
+            with open(cff_file_path, "rb") as file:
+                file.read(cff_bytes_read)
+                dat_bytes = file.read(fbytes)
+            self.read("\n".join(cfg_lines), dat_bytes)
 
         # stores additional data
         self._hdr = "\n".join(hdr_lines)
@@ -861,6 +907,7 @@ class Comtrade:
                                           self._cfg.timemult))
         lines.append(format_line.format(self.ft))
         return "\n".join(lines)
+
 
 
 class Channel:
@@ -949,13 +996,8 @@ class DatReader:
             # extract CFG file information regarding data dimensions
             self._cfg = cfg
             self._preallocate()
-            if self.read_mode == 'r':
-                with open(self.file_path, self.read_mode, encoding='utf-8') as contents:
-                    self.parse(contents)
-            else:
-                # Probably binary reading
-                with open(self.file_path, self.read_mode) as contents:
-                    self.parse(contents)
+            with open(self.file_path, self.read_mode) as contents:
+                self.parse(contents)
         else:
             raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT),
                                     self.file_path)
@@ -1022,9 +1064,12 @@ class DatReader:
 
 class AsciiDatReader(DatReader):
     """ASCII format DatReader subclass."""
-    ASCII_SEPARATOR = SEPARATOR
+    def __init__(self):
+        # Call the initialization for the inherited class
+        super().__init__()
+        self.ASCII_SEPARATOR = SEPARATOR
 
-    DATA_MISSING = ""
+        self.DATA_MISSING = ""
 
     def parse(self, contents):
         """Parse a ASCII file contents."""
@@ -1067,24 +1112,27 @@ class AsciiDatReader(DatReader):
 
 class BinaryDatReader(DatReader):
     """16-bit binary format DatReader subclass."""
-    ANALOG_BYTES = 2
-    STATUS_BYTES = 2
-    TIME_BYTES = 4
-    SAMPLE_NUMBER_BYTES = 4
+    def __init__(self):
+        # Call the initialization for the inherited class
+        super().__init__()
+        self.ANALOG_BYTES = 2
+        self.STATUS_BYTES = 2
+        self.TIME_BYTES = 4
+        self.SAMPLE_NUMBER_BYTES = 4
 
-    # maximum negative value
-    DATA_MISSING = 0xFFFF
+        # maximum negative value
+        self.DATA_MISSING = 0xFFFF
 
-    read_mode = "rb"
+        self.read_mode = "rb"
 
-    if struct.calcsize("L") == 4:
-        STRUCT_FORMAT = "LL {acount:d}h {dcount:d}H"
-        STRUCT_FORMAT_ANALOG_ONLY = "LL {acount:d}h"
-        STRUCT_FORMAT_STATUS_ONLY = "LL {dcount:d}H"
-    else:
-        STRUCT_FORMAT = "II {acount:d}h {dcount:d}H"
-        STRUCT_FORMAT_ANALOG_ONLY = "II {acount:d}h"
-        STRUCT_FORMAT_STATUS_ONLY = "II {dcount:d}H"
+        if struct.calcsize("L") == 4:
+            self.STRUCT_FORMAT = "LL {acount:d}h {dcount:d}H"
+            self.STRUCT_FORMAT_ANALOG_ONLY = "LL {acount:d}h"
+            self.STRUCT_FORMAT_STATUS_ONLY = "LL {dcount:d}H"
+        else:
+            self.STRUCT_FORMAT = "II {acount:d}h {dcount:d}H"
+            self.STRUCT_FORMAT_ANALOG_ONLY = "II {acount:d}h"
+            self.STRUCT_FORMAT_STATUS_ONLY = "II {dcount:d}H"
 
     def get_reader_format(self, analog_channels, status_bytes):
         # Number of status fields of 2 bytes based on the total number of 
@@ -1125,7 +1173,10 @@ class BinaryDatReader(DatReader):
         # Row reading function.
         next_row = None
         if isinstance(contents, io.TextIOBase) or \
-                isinstance(contents, io.BufferedIOBase):
+                isinstance(contents, io.BufferedIOBase) or \
+                isinstance(contents, bytes):
+            if isinstance(contents, bytes):
+                contents = io.BytesIO(contents)
             def next_row(offset: int):
                 return contents.read(bytes_per_row)
 
@@ -1178,21 +1229,35 @@ class BinaryDatReader(DatReader):
 
 class Binary32DatReader(BinaryDatReader):
     """32-bit binary format DatReader subclass."""
-    ANALOG_BYTES = 4
+    def __init__(self):
+        # Call the initialization for the inherited class
+        super().__init__()
+        self.ANALOG_BYTES = 4
 
-    STRUCT_FORMAT = "LL {acount:d}l {dcount:d}H"
-    STRUCT_FORMAT_ANALOG_ONLY = "LL {acount:d}l"
+        if struct.calcsize("L") == 4:
+            self.STRUCT_FORMAT = "LL {acount:d}l {dcount:d}H"
+            self.STRUCT_FORMAT_ANALOG_ONLY = "LL {acount:d}l"
+        else:
+            self.STRUCT_FORMAT = "II {acount:d}i {dcount:d}H"
+            self.STRUCT_FORMAT_ANALOG_ONLY = "II {acount:d}i"
 
-    # maximum negative value
-    DATA_MISSING = 0xFFFFFFFF
+        # maximum negative value
+        self.DATA_MISSING = 0xFFFFFFFF
 
 
 class Float32DatReader(BinaryDatReader):
     """Single precision (float) binary format DatReader subclass."""
-    ANALOG_BYTES = 4
+    def __init__(self):
+        # Call the initialization for the inherited class
+        super().__init__()
+        self.ANALOG_BYTES = 4
 
-    STRUCT_FORMAT = "LL {acount:d}f {dcount:d}H"
-    STRUCT_FORMAT_ANALOG_ONLY = "LL {acount:d}f"
+        if struct.calcsize("L") == 4:
+            self.STRUCT_FORMAT = "LL {acount:d}f {dcount:d}H"
+            self.STRUCT_FORMAT_ANALOG_ONLY = "LL {acount:d}f"
+        else:
+            self.STRUCT_FORMAT = "II {acount:d}f {dcount:d}H"
+            self.STRUCT_FORMAT_ANALOG_ONLY = "II {acount:d}f"
 
-    # Maximum negative value
-    DATA_MISSING = sys.float_info.min
+        # Maximum negative value
+        self.DATA_MISSING = sys.float_info.min
