@@ -127,7 +127,7 @@ def fill_with_zeros_to_the_right(number_str: str, width: int):
     return number_str
 
 
-def _read_timestamp(timestamp_line: str, ignore_warnings=False) -> tuple:
+def _read_timestamp(timestamp_line: str, rev_year: str, ignore_warnings: bool = False) -> tuple:
     """Process comma separated fields and returns a tuple containing the timestamp
     and a boolean value indicating whether nanoseconds are used.
     Can possibly return the timestamp 00/00/0000 00:00:00.000 for empty strings
@@ -139,7 +139,12 @@ def _read_timestamp(timestamp_line: str, ignore_warnings=False) -> tuple:
         if len(values) >= 2:
             date_str, time_str = values[0:2]
             if len(date_str.strip()) > 0:
-                day, month, year = _get_date(date_str)
+                # 1991 Format Uses mm/dd/yyyy format
+                if rev_year == REV_1991:
+                    month, day, year = _get_date(date_str)
+                # Modern Formats Use dd/mm/yyyy format
+                else:
+                    day, month, year = _get_date(date_str)
             if len(time_str.strip()) > 0:
                 hour, minute, second, microsecond, \
                     nanosec = _get_time(time_str, ignore_warnings)
@@ -451,14 +456,22 @@ class Cfg:
         # First data point time and time base
         line = cfg.readline()
         ts_str = line.strip()
-        self._start_timestamp, nanosec = _read_timestamp(ts_str, self.ignore_warnings)
+        self._start_timestamp, nanosec = _read_timestamp(
+            ts_str,
+            self.rev_year,
+            self.ignore_warnings
+        )
         self._time_base = self._get_time_base(nanosec)
         line_count = line_count + 1
 
         # Event data point and time base
         line = cfg.readline()
         ts_str = line.strip()
-        self._trigger_timestamp, nanosec = _read_timestamp(ts_str, self.ignore_warnings)
+        self._trigger_timestamp, nanosec = _read_timestamp(
+            ts_str,
+            self.rev_year,
+            self.ignore_warnings
+        )
         self._time_base = min([self.time_base, self._get_time_base(nanosec)])
         line_count = line_count + 1
 
