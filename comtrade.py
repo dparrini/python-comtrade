@@ -458,7 +458,7 @@ class Cfg:
         ts_str = line.strip()
         self._start_timestamp, nanosec = _read_timestamp(
             ts_str,
-            self._cfg.rev_year,
+            self.rev_year,
             self.ignore_warnings
         )
         self._time_base = self._get_time_base(nanosec)
@@ -469,7 +469,7 @@ class Cfg:
         ts_str = line.strip()
         self._trigger_timestamp, nanosec = _read_timestamp(
             ts_str,
-            self._cfg.rev_year,
+            self.rev_year,
             self.ignore_warnings
         )
         self._time_base = min([self.time_base, self._get_time_base(nanosec)])
