@@ -381,7 +381,7 @@ class Cfg:
                     warnings.warn(Warning(msg))
         else:
             self._station_name, self._rec_dev_id = packed
-            self._rev_year = REV_1999
+            self._rev_year = REV_1991
         line_count = line_count + 1
 
         # Second line
