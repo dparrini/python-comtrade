@@ -22,6 +22,7 @@
 # SOFTWARE.
 
 
+import array
 import datetime as dt
 import errno
 import io
@@ -991,7 +992,7 @@ class DatReader:
         self.file_path = ""
         self._content = None
         self._cfg = None
-        self.time = []
+        self.time = array.array("f")
         self.analog = []
         self.status = []
         self._total_samples = 0
@@ -1035,14 +1036,14 @@ class DatReader:
         status_count = self._cfg.status_count
 
         # preallocate analog and status values
-        self.time = [0.0] * steps
+        self.time = array.array("f", [0.0]) * steps
         self.analog = [None] * analog_count
         self.status = [None] * status_count
         # preallocate each channel values with zeros
         for i in range(analog_count):
-            self.analog[i] = [0.0] * steps
+            self.analog[i] = array.array("f", [0.0]) * steps
         for i in range(status_count):
-            self.status[i] = [0] * steps
+            self.status[i] = array.array("i", [0]) * steps
 
     def _get_samp(self, n) -> float:
         """Get the sampling rate for a sample n (1-based index)."""
