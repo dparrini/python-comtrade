@@ -44,7 +44,8 @@ plt.legend([rec.analog_channel_ids[0], rec.analog_channel_ids[1]])
 plt.show()
 ```
 
-Additional header (`*.hdr`) and information (`*.inf`) files are not supported.
+It will read the contents of additional header (`*.hdr`) and information (`*.inf`) files. 
+Their contents are available through `Comtrade.hdr` and `Comtrade.inf` properties.
 
 
 ### CFF files (2013 revision)
@@ -112,6 +113,30 @@ Feel free to pull requests implementing one of these unsupported features or fix
 * Use of multiple sample rates in time calculations for binary data.
 * Null fields in ASCII data (blank columns).
 * Missing data fields in binary data (`0xFFFF...`) are treated as any other value.
+
+
+### Additional settings
+
+#### Numpy arrays as data structures
+
+The use of `numpy.array` as a data structure to hold time, analog and status data can be enforced
+in `Comtrade` object constructor:
+
+```python
+obj = Comtrade(use_numpy_arrays=True)
+```
+
+It may improve performance for computations after loading data.
+
+
+#### File encodings
+
+Specify the `encoding` as a keyword argument on all load methods as you'd specify for common file loading:
+
+```python
+rec = Comtrade()
+rec.load("sample_files/sample_ascii.cff", encoding="iso-8859-1")
+```
 
 
 ## Documentation
