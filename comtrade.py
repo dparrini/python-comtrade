@@ -1186,27 +1186,11 @@ class BinaryDatReader(DatReader):
         # Row reading function.
         next_row = None
         if isinstance(contents, io.TextIOBase) or \
-                isinstance(contents, io.BufferedIOBase) or \
-                isinstance(contents, bytes):
-            if isinstance(contents, bytes):
-                contents = io.BytesIO(contents)
-            def next_row(offset: int):
-                return contents.read(bytes_per_row)
+                isinstance(contents, io.BufferedIOBase):
+            # Read all buffer contents
+            contents = contents.read()
 
-        elif isinstance(contents, str):
-            def next_row(offset: int):
-                return contents[offset:offset + bytes_per_row]
-        else:
-            raise TypeError("Unsupported content type: {}".format(
-                type(contents)))
-
-        # Get next row.
-        buffer_offset = 0
-        row = next_row(buffer_offset)
-
-        irow = 0
-        while row != b'':
-            values = row_reader.unpack(row)
+        for irow, values in enumerate(row_reader.iter_unpack(contents)):
             # Sample number
             n = values[0]
             # Time stamp
@@ -1236,8 +1220,6 @@ class BinaryDatReader(DatReader):
 
             # Get the next row
             irow += 1
-            buffer_offset += bytes_per_row
-            row = next_row(buffer_offset)
 
 
 class Binary32DatReader(BinaryDatReader):
