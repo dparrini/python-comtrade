@@ -1138,23 +1138,24 @@ class AsciiDatReader(DatReader):
         line_number = 0
         for line in lines:
             line_number = line_number + 1
-            if line_number <= self._total_samples:
-                values = line.strip().split(self.ASCII_SEPARATOR)
+            if line_number > self._total_samples:
+                break
+            values = line.strip().split(self.ASCII_SEPARATOR)
 
-                n = int(values[0])
-                # Read time
-                ts_val = float(values[1])
-                ts = self._get_time(n, ts_val, time_base, time_mult)
+            n = int(values[0])
+            # Read time
+            ts_val = float(values[1])
+            ts = self._get_time(n, ts_val, time_base, time_mult)
 
-                avalues = [float(x)*a[i] + b[i] for i, x in enumerate(values[2:analog_count+2])]
-                svalues = [int(x) for x in values[len(values)-status_count:]]
+            avalues = [float(x)*a[i] + b[i] for i, x in enumerate(values[2:analog_count+2])]
+            svalues = [int(x) for x in values[len(values)-status_count:]]
 
-                # store
-                self.time[line_number-1] = ts
-                for i in range(analog_count):
-                    self.analog[i][line_number - 1] = avalues[i]
-                for i in range(status_count):
-                    self.status[i][line_number - 1] = svalues[i]
+            # store
+            self.time[line_number-1] = ts
+            for i in range(analog_count):
+                self.analog[i][line_number - 1] = avalues[i]
+            for i in range(status_count):
+                self.status[i][line_number - 1] = svalues[i]
 
 
 class BinaryDatReader(DatReader):
@@ -1231,6 +1232,8 @@ class BinaryDatReader(DatReader):
             ts_val = values[1]
             ts = self._get_time(n, ts_val, time_base, time_mult)
 
+            if irow >= self.total_samples:
+                break
             self.time[irow] = ts
 
             # Extract analog channel values.
