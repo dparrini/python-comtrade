@@ -424,5 +424,49 @@ class TestEncodingHandling(unittest.TestCase):
         self.assertEqual(obj.cfg.rec_dev_id, "Oscilógrafo")
 
 
+class TestDoublePrecisionHandling(unittest.TestCase):
+    def test_should_use_single_by_default(self):
+        comtrade = Comtrade(ignore_warnings=True)
+        comtrade.load(
+            "tests/sample_files/sample_ascii.cfg",
+            "tests/sample_files/sample_ascii.dat",
+        )
+
+        self.assertEqual(comtrade._use_double_precision, False)
+        self.assertEqual(comtrade._get_dat_reader()._use_double_precision, False)
+
+        self.assertEqual(comtrade.time.typecode, "f")
+        for chan in comtrade.analog:
+            self.assertEqual(chan.typecode, "f")
+
+    def test_should_use_single_when_specified(self):
+        comtrade = Comtrade(ignore_warnings=True, use_double_precision=False)
+        comtrade.load(
+            "tests/sample_files/sample_ascii.cfg",
+            "tests/sample_files/sample_ascii.dat",
+        )
+
+        self.assertEqual(comtrade._use_double_precision, False)
+        self.assertEqual(comtrade._get_dat_reader()._use_double_precision, False)
+
+        self.assertEqual(comtrade.time.typecode, "f")
+        for chan in comtrade.analog:
+            self.assertEqual(chan.typecode, "f")
+
+    def test_should_use_double_when_specified(self):
+        comtrade = Comtrade(ignore_warnings=True, use_double_precision=True)
+        comtrade.load(
+            "tests/sample_files/sample_ascii.cfg",
+            "tests/sample_files/sample_ascii.dat",
+        )
+
+        self.assertEqual(comtrade._use_double_precision, True)
+        self.assertEqual(comtrade._get_dat_reader()._use_double_precision, True)
+
+        self.assertEqual(comtrade.time.typecode, "d")
+        for chan in comtrade.analog:
+            self.assertEqual(chan.typecode, "d")
+
+
 if __name__ == "__main__":
     unittest.main()
