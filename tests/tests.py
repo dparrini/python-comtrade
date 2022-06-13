@@ -413,9 +413,15 @@ class TestRealBinaryReading(unittest.TestCase):
 
 
 class TestEncodingHandling(unittest.TestCase):
-    def test_utf8_check(self):
-        self.assertTrue(comtrade._file_is_utf8("tests/sample_files/sample_ascii_utf-8.cfg"))
-        self.assertFalse(comtrade._file_is_utf8("tests/sample_files/sample_ascii.cfg"))
+    def test_loading_utf8(self):
+        obj = comtrade.Comtrade()
+        obj.load(
+            "tests/sample_files/sample_ascii_utf-8.cfg",
+            "tests/sample_files/sample_ascii.dat",
+            encoding="utf-8",
+        )
+        self.assertEqual(obj.cfg.station_name, "SMARTSTATION testing text encoding: hgvcj터파크387")
+        self.assertEqual(obj.cfg.rec_dev_id, "IED123")
 
     def test_loading_iso8859_1(self):
         obj = comtrade.Comtrade()
