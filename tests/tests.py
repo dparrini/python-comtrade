@@ -422,7 +422,13 @@ class TestEncodingHandling(unittest.TestCase):
         obj.load("tests/sample_files/sample_iso8859-1.cfg", encoding="iso-8859-1")
         self.assertEqual(obj.cfg.station_name, "Estação de Medição")
         self.assertEqual(obj.cfg.rec_dev_id, "Oscilógrafo")
-
+    
+    def test_loading_iso8859_1_bin(self):
+        obj = comtrade.Comtrade()
+        obj.load("tests/sample_files/sample_iso8859-1_bin.cfg", encoding="iso-8859-1")
+        self.assertEqual(obj.cfg.station_name, "Estação de Medição")
+        self.assertEqual(obj.cfg.rec_dev_id, "Oscilógrafo")
+ 
 
 if __name__ == "__main__":
     unittest.main()
