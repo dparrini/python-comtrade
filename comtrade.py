@@ -22,6 +22,7 @@
 # SOFTWARE.
 
 
+import array
 import datetime as dt
 import errno
 import io
@@ -31,6 +32,12 @@ import re
 import struct
 import sys
 import warnings
+
+try:
+    import numpy
+    HAS_NUMPY = True
+except ModuleNotFoundError:
+    HAS_NUMPY = False
 
 
 # COMTRADE standard revisions
@@ -73,6 +80,13 @@ def _read_sep_values(line, expected: int = -1, default: str = ''):
         return values
     return [values[i] if i < len(values) else default
             for i in range(expected)]
+
+
+def _preallocate_values(array_type, size, use_numpy_arrays):
+    type_mapping_numpy = {"f": "float32", "i": "int32"}
+    if HAS_NUMPY and use_numpy_arrays:
+        return numpy.zeros(size, dtype=type_mapping_numpy[array_type])
+    return array.array(array_type, [0]) * size
 
 
 def _prevent_null(str_value: str, value_type: type, default_value):
@@ -127,7 +141,7 @@ def fill_with_zeros_to_the_right(number_str: str, width: int):
     return number_str
 
 
-def _read_timestamp(timestamp_line: str, ignore_warnings=False) -> tuple:
+def _read_timestamp(timestamp_line: str, rev_year: str, ignore_warnings: bool = False) -> tuple:
     """Process comma separated fields and returns a tuple containing the timestamp
     and a boolean value indicating whether nanoseconds are used.
     Can possibly return the timestamp 00/00/0000 00:00:00.000 for empty strings
@@ -139,7 +153,12 @@ def _read_timestamp(timestamp_line: str, ignore_warnings=False) -> tuple:
         if len(values) >= 2:
             date_str, time_str = values[0:2]
             if len(date_str.strip()) > 0:
-                day, month, year = _get_date(date_str)
+                # 1991 Format Uses mm/dd/yyyy format
+                if rev_year == REV_1991:
+                    month, day, year = _get_date(date_str)
+                # Modern Formats Use dd/mm/yyyy format
+                else:
+                    day, month, year = _get_date(date_str)
             if len(time_str.strip()) > 0:
                 hour, minute, second, microsecond, \
                     nanosec = _get_time(time_str, ignore_warnings)
@@ -332,14 +351,16 @@ class Cfg:
                                         "use status_count instead."))
         return self._status_count
 
-    def load(self, filepath):
+    def load(self, filepath, **user_kwargs):
         """Load and read a CFG file contents."""
         self.filepath = filepath
 
         if os.path.isfile(self.filepath):
             kwargs = {}
-            if _file_is_utf8(self.filepath):
+            if "encoding" not in user_kwargs and _file_is_utf8(self.filepath):
                 kwargs["encoding"] = "utf-8"
+            elif "encoding" in user_kwargs:
+                kwargs["encoding"] = user_kwargs["encoding"]
             with open(self.filepath, "r", **kwargs) as cfg:
                 self._read_io(cfg)
         else:
@@ -376,7 +397,7 @@ class Cfg:
                     warnings.warn(Warning(msg))
         else:
             self._station_name, self._rec_dev_id = packed
-            self._rev_year = REV_1999
+            self._rev_year = REV_1991
         line_count = line_count + 1
 
         # Second line
@@ -451,14 +472,22 @@ class Cfg:
         # First data point time and time base
         line = cfg.readline()
         ts_str = line.strip()
-        self._start_timestamp, nanosec = _read_timestamp(ts_str, self.ignore_warnings)
+        self._start_timestamp, nanosec = _read_timestamp(
+            ts_str,
+            self.rev_year,
+            self.ignore_warnings
+        )
         self._time_base = self._get_time_base(nanosec)
         line_count = line_count + 1
 
         # Event data point and time base
         line = cfg.readline()
         ts_str = line.strip()
-        self._trigger_timestamp, nanosec = _read_timestamp(ts_str, self.ignore_warnings)
+        self._trigger_timestamp, nanosec = _read_timestamp(
+            ts_str,
+            self.rev_year,
+            self.ignore_warnings
+        )
         self._time_base = min([self.time_base, self._get_time_base(nanosec)])
         line_count = line_count + 1
 
@@ -529,8 +558,14 @@ class Comtrade:
         self._status_phases = []
         self._timestamp_critical = False
 
+        # Data types
+        if "use_numpy_arrays" in kwargs:
+            self._use_numpy_arrays = kwargs["use_numpy_arrays"]
+        else:
+            self._use_numpy_arrays = False
+
         # DAT file data
-        self._time_values = []
+        self._time_values = _preallocate_values("f", 0, self._use_numpy_arrays)
         self._analog_values = []
         self._status_values = []
 
@@ -688,14 +723,15 @@ class Comtrade:
         # case insensitive comparison of file format
         dat = None
         ft_upper = self.ft.upper()
+        dat_kwargs = {"use_numpy_arrays": self._use_numpy_arrays}
         if ft_upper == TYPE_ASCII:
-            dat = AsciiDatReader()
+            dat = AsciiDatReader(**dat_kwargs)
         elif ft_upper == TYPE_BINARY:
-            dat = BinaryDatReader()
+            dat = BinaryDatReader(**dat_kwargs)
         elif ft_upper == TYPE_BINARY32:
-            dat = Binary32DatReader()
+            dat = Binary32DatReader(**dat_kwargs)
         elif ft_upper == TYPE_FLOAT32:
-            dat = Float32DatReader()
+            dat = Float32DatReader(**dat_kwargs)
         else:
             dat = None
             raise Exception("Not supported data file format: {}".format(self.ft))
@@ -771,11 +807,14 @@ class Comtrade:
                 hdr_file = basename + self.EXT_HDR
 
             # load both cfg and dat
-            self._load_cfg_dat(cfg_file, dat_file)
+            file_kwargs = {}
+            if "encoding" in kwargs:
+                file_kwargs["encoding"] = kwargs["encoding"]
+            self._load_cfg_dat(cfg_file, dat_file, **file_kwargs)
 
             # Load additional inf and hdr files, if they exist.
-            self._load_inf(inf_file)
-            self._load_hdr(hdr_file)
+            self._load_inf(inf_file, **file_kwargs)
+            self._load_hdr(hdr_file, **file_kwargs)
 
         elif file_ext == "CFF":
             # check if the CFF file exists
@@ -783,8 +822,8 @@ class Comtrade:
         else:
             raise Exception(r"Expected CFG file path, got intead \"{}\".".format(cfg_file))
 
-    def _load_cfg_dat(self, cfg_filepath, dat_filepath):
-        self._cfg.load(cfg_filepath)
+    def _load_cfg_dat(self, cfg_filepath, dat_filepath, **kwargs):
+        self._cfg.load(cfg_filepath, **kwargs)
 
         # channel ids
         self._cfg_extract_channels_ids(self._cfg)
@@ -793,15 +832,14 @@ class Comtrade:
         self._cfg_extract_phases(self._cfg)
 
         dat = self._get_dat_reader()
-        dat.load(dat_filepath, self._cfg)
+        dat.load(dat_filepath, self._cfg, **kwargs)
 
         # copy dat object information
         self._dat_extract_data(dat)
 
-    def _load_inf(self, inf_file):
+    def _load_inf(self, inf_file, **kwargs):
         if os.path.exists(inf_file):
-            kwargs = {}
-            if _file_is_utf8(self.file_path):
+            if "encoding" not in kwargs and _file_is_utf8(self.file_path):
                 kwargs["encoding"] = "utf-8"
             with open(inf_file, 'r', **kwargs) as file:
                 self._inf = file.read()
@@ -810,10 +848,9 @@ class Comtrade:
         else:
             self._inf = None
 
-    def _load_hdr(self, hdr_file):
+    def _load_hdr(self, hdr_file, **kwargs):
         if os.path.exists(hdr_file):
-            kwargs = {}
-            if _file_is_utf8(self.file_path):
+            if "encoding" not in kwargs and _file_is_utf8(self.file_path):
                 kwargs["encoding"] = "utf-8"
             with open(hdr_file, 'r', **kwargs) as file:
                 self._hdr = file.read()
@@ -822,7 +859,7 @@ class Comtrade:
         else:
             self._hdr = None
 
-    def _load_cff(self, cff_file_path: str):
+    def _load_cff(self, cff_file_path: str, **kwargs):
         # stores each file type lines
         cfg_lines = []
         dat_lines = []
@@ -832,9 +869,11 @@ class Comtrade:
         ftype = None
         # file format: ASCII, BINARY, BINARY32, FLOAT32
         fformat = None
+        if "encoding" not in kwargs and _file_is_utf8(cff_file_path):
+            kwargs["encoding"] = "utf-8"
         # Number of bytes for binary/float dat
         fbytes = 0
-        with open(cff_file_path, "r") as file:
+        with open(cff_file_path, "r", **kwargs) as file:
             header_re = re.compile(CFF_HEADER_REXP)
             last_match = None
             line_number = 0
@@ -909,7 +948,6 @@ class Comtrade:
         return "\n".join(lines)
 
 
-
 class Channel:
     """Holds common channel description data."""
     def __init__(self, n=1, name='', ph='', ccbm=''):
@@ -973,12 +1011,16 @@ class DatReader:
     """Abstract DatReader class. Used to parse DAT file contents."""
     read_mode = "r"
 
-    def __init__(self):
+    def __init__(self, **kwargs):
         """DatReader class constructor."""
+        if "use_numpy_arrays" in kwargs:
+            self._use_numpy_arrays = kwargs["use_numpy_arrays"]
+        else:
+            self._use_numpy_arrays = False
         self.file_path = ""
         self._content = None
         self._cfg = None
-        self.time = []
+        self.time = _preallocate_values("f", 0, self._use_numpy_arrays)
         self.analog = []
         self.status = []
         self._total_samples = 0
@@ -988,7 +1030,7 @@ class DatReader:
         """Return the total samples (per channel)."""
         return self._total_samples
 
-    def load(self, dat_filepath, cfg):
+    def load(self, dat_filepath, cfg, **kwargs):
         """Load a DAT file and parse its contents."""
         self.file_path = dat_filepath
         self._content = None
@@ -996,7 +1038,10 @@ class DatReader:
             # extract CFG file information regarding data dimensions
             self._cfg = cfg
             self._preallocate()
-            with open(self.file_path, self.read_mode) as contents:
+            if "encoding" not in kwargs and self.read_mode != "rb" and \
+                    _file_is_utf8(self.file_path):
+                kwargs["encoding"] = "utf-8"
+            with open(self.file_path, self.read_mode, **kwargs) as contents:
                 self.parse(contents)
         else:
             raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT),
@@ -1022,14 +1067,16 @@ class DatReader:
         status_count = self._cfg.status_count
 
         # preallocate analog and status values
-        self.time = [0.0] * steps
+        self.time = _preallocate_values("f", steps, self._use_numpy_arrays)
         self.analog = [None] * analog_count
         self.status = [None] * status_count
         # preallocate each channel values with zeros
         for i in range(analog_count):
-            self.analog[i] = [0.0] * steps
+            self.analog[i] = _preallocate_values("f", steps,
+                self._use_numpy_arrays)
         for i in range(status_count):
-            self.status[i] = [0] * steps
+            self.status[i] = _preallocate_values("i", steps,
+                self._use_numpy_arrays)
 
     def _get_samp(self, n) -> float:
         """Get the sampling rate for a sample n (1-based index)."""
@@ -1064,9 +1111,9 @@ class DatReader:
 
 class AsciiDatReader(DatReader):
     """ASCII format DatReader subclass."""
-    def __init__(self):
+    def __init__(self, **kwargs):
         # Call the initialization for the inherited class
-        super().__init__()
+        super().__init__(**kwargs)
         self.ASCII_SEPARATOR = SEPARATOR
 
         self.DATA_MISSING = ""
@@ -1091,30 +1138,31 @@ class AsciiDatReader(DatReader):
         line_number = 0
         for line in lines:
             line_number = line_number + 1
-            if line_number <= self._total_samples:
-                values = line.strip().split(self.ASCII_SEPARATOR)
+            if line_number > self._total_samples:
+                break
+            values = line.strip().split(self.ASCII_SEPARATOR)
 
-                n = int(values[0])
-                # Read time
-                ts_val = float(values[1])
-                ts = self._get_time(n, ts_val, time_base, time_mult)
+            n = int(values[0])
+            # Read time
+            ts_val = float(values[1])
+            ts = self._get_time(n, ts_val, time_base, time_mult)
 
-                avalues = [float(x)*a[i] + b[i] for i, x in enumerate(values[2:analog_count+2])]
-                svalues = [int(x) for x in values[len(values)-status_count:]]
+            avalues = [float(x)*a[i] + b[i] for i, x in enumerate(values[2:analog_count+2])]
+            svalues = [int(x) for x in values[len(values)-status_count:]]
 
-                # store
-                self.time[line_number-1] = ts
-                for i in range(analog_count):
-                    self.analog[i][line_number - 1] = avalues[i]
-                for i in range(status_count):
-                    self.status[i][line_number - 1] = svalues[i]
+            # store
+            self.time[line_number-1] = ts
+            for i in range(analog_count):
+                self.analog[i][line_number - 1] = avalues[i]
+            for i in range(status_count):
+                self.status[i][line_number - 1] = svalues[i]
 
 
 class BinaryDatReader(DatReader):
     """16-bit binary format DatReader subclass."""
-    def __init__(self):
+    def __init__(self, **kwargs):
         # Call the initialization for the inherited class
-        super().__init__()
+        super().__init__(**kwargs)
         self.ANALOG_BYTES = 2
         self.STATUS_BYTES = 2
         self.TIME_BYTES = 4
@@ -1173,33 +1221,19 @@ class BinaryDatReader(DatReader):
         # Row reading function.
         next_row = None
         if isinstance(contents, io.TextIOBase) or \
-                isinstance(contents, io.BufferedIOBase) or \
-                isinstance(contents, bytes):
-            if isinstance(contents, bytes):
-                contents = io.BytesIO(contents)
-            def next_row(offset: int):
-                return contents.read(bytes_per_row)
+                isinstance(contents, io.BufferedIOBase):
+            # Read all buffer contents
+            contents = contents.read()
 
-        elif isinstance(contents, str):
-            def next_row(offset: int):
-                return contents[offset:offset + bytes_per_row]
-        else:
-            raise TypeError("Unsupported content type: {}".format(
-                type(contents)))
-
-        # Get next row.
-        buffer_offset = 0
-        row = next_row(buffer_offset)
-
-        irow = 0
-        while row != b'':
-            values = row_reader.unpack(row)
+        for irow, values in enumerate(row_reader.iter_unpack(contents)):
             # Sample number
             n = values[0]
             # Time stamp
             ts_val = values[1]
             ts = self._get_time(n, ts_val, time_base, time_mult)
 
+            if irow >= self.total_samples:
+                break
             self.time[irow] = ts
 
             # Extract analog channel values.
@@ -1223,15 +1257,13 @@ class BinaryDatReader(DatReader):
 
             # Get the next row
             irow += 1
-            buffer_offset += bytes_per_row
-            row = next_row(buffer_offset)
 
 
 class Binary32DatReader(BinaryDatReader):
     """32-bit binary format DatReader subclass."""
-    def __init__(self):
+    def __init__(self, **kwargs):
         # Call the initialization for the inherited class
-        super().__init__()
+        super().__init__(**kwargs)
         self.ANALOG_BYTES = 4
 
         if struct.calcsize("L") == 4:
@@ -1247,9 +1279,9 @@ class Binary32DatReader(BinaryDatReader):
 
 class Float32DatReader(BinaryDatReader):
     """Single precision (float) binary format DatReader subclass."""
-    def __init__(self):
+    def __init__(self, **kwargs):
         # Call the initialization for the inherited class
-        super().__init__()
+        super().__init__(**kwargs)
         self.ANALOG_BYTES = 4
 
         if struct.calcsize("L") == 4:

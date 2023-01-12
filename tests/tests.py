@@ -396,7 +396,7 @@ class TestRealBinaryReading(unittest.TestCase):
 
     def test_value_conversion(self):
         va_4 = -23425 * 0.000361849
-        self.assertAlmostEqual(va_4, self.comtrade.analog[0][3])
+        self.assertAlmostEqual(va_4, self.comtrade.analog[0][3], places=6)
 
     def test_values(self):
         va = self.comtrade.analog[0][0]
@@ -413,9 +413,15 @@ class TestRealBinaryReading(unittest.TestCase):
 
 
 class TestEncodingHandling(unittest.TestCase):
-    def test_test_function(self):
+    def test_utf8_check(self):
         self.assertTrue(comtrade._file_is_utf8("tests/sample_files/sample_ascii_utf-8.cfg"))
         self.assertFalse(comtrade._file_is_utf8("tests/sample_files/sample_ascii.cfg"))
+
+    def test_loading_iso8859_1(self):
+        obj = comtrade.Comtrade()
+        obj.load("tests/sample_files/sample_iso8859-1.cfg", encoding="iso-8859-1")
+        self.assertEqual(obj.cfg.station_name, "Estação de Medição")
+        self.assertEqual(obj.cfg.rec_dev_id, "Oscilógrafo")
 
 
 if __name__ == "__main__":
