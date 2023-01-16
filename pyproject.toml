@@ -9,7 +9,7 @@ authors = [
     {name = "Joe Stanley", email = "engineerjoe440@yahoo.com"}
 ]
 maintainers = [
-    {name = "Joe Stanley", email = "engineerjoe440@yahoo.com"}
+    {name = "David Parrini"},
 ]
 description = "A Python 3 module designed to read Common Format for Transient Data Exchange (COMTRADE) files."
 readme = "README.md"
