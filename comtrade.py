@@ -394,7 +394,8 @@ class Cfg:
         line = cfg.readline()
         # station, device, and comtrade standard revision information
         packed = _read_sep_values(line)
-        if 3 == len(packed):
+        pack_len = len(packed)
+        if 3 == pack_len:
             # only 1999 revision and above has the standard revision year
             self._station_name, self._rec_dev_id, self._rev_year = packed
             self._rev_year = self._rev_year.strip()
@@ -403,9 +404,21 @@ class Cfg:
                 if not self.ignore_warnings:
                     msg = WARNING_UNKNOWN_REVISION.format(self._rev_year)
                     warnings.warn(Warning(msg))
-        else:
+        elif pack_len == 2:
             self._station_name, self._rec_dev_id = packed
             self._rev_year = REV_1991
+        else:
+            warnings.warn(
+                (
+                    f"COMTRADE CFG file presents a heading with an {pack_len} "
+                    "fields, more than the expected 3. This may be indication "
+                    "of an invalid COMTRADE file format."
+                ),
+                UserWarning
+            )
+            self._station_name = packed[0]
+            self._rev_year = packed[-1]
+            self._rec_dev_id = ",".join(packed[1:-1])
         line_count = line_count + 1
 
         # Second line
