@@ -1,0 +1,26 @@
+[build-system]
+requires = ["flit_core >=3.2,<4"]
+build-backend = "flit_core.buildapi"
+
+[project]
+name = "python-comtrade"
+authors = [
+    {name = "David Parrini"},
+    {name = "Joe Stanley", email = "engineerjoe440@yahoo.com"}
+]
+maintainers = [
+    {name = "David Parrini"},
+]
+description = "A Python 3 module designed to read Common Format for Transient Data Exchange (COMTRADE) files."
+readme = "README.md"
+license = {file = "LICENSE"}
+classifiers = [
+    "License :: OSI Approved :: MIT License"
+]
+dynamic = ["version"]
+
+[project.urls]
+Home = "https://github.com/engineerjoe440/python-comtrade"
+
+[tool.flit.module]
+name = "comtrade"

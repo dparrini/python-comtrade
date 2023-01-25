@@ -39,6 +39,7 @@ try:
 except ModuleNotFoundError:
     HAS_NUMPY = False
 
+__version__ = "0.0.11"
 
 # COMTRADE standard revisions
 REV_1991 = "1991"
@@ -184,15 +185,18 @@ def _read_timestamp(timestamp_line: str, rev_year: str, ignore_warnings: bool = 
 
 def _file_is_utf8(file_path):
     if os.path.exists(file_path):
-        with open(file_path, "r") as file:
-            return _stream_is_utf8(file)
+        try:
+            with open(file_path, "r", encoding="utf-8") as file:
+                return _stream_is_utf8(file)
+        except UnicodeDecodeError:
+            return False
     return False
 
 
 def _stream_is_utf8(stream):
     try:
-        contents = stream.readlines()
-    except UnicodeDecodeError as exception:
+        _ = stream.readlines()
+    except UnicodeDecodeError:
         return True
     return False
 
@@ -208,10 +212,11 @@ class Cfg:
         Cfg object constructor.
 
         Keyword arguments:
-        ignore_warnings -- whether warnings are displayed in stdout 
+        ignore_warnings -- whether warnings are displayed in stdout
             (default: False)
         """
         self.filename = ""
+        self.filepath = None
         # implicit data
         self._time_base = self.TIME_BASE_MICROSEC
 
@@ -249,7 +254,7 @@ class Cfg:
     def station_name(self) -> str:
         """Return the recording device's station name."""
         return self._station_name
-    
+
     @property
     def rec_dev_id(self) -> str:
         """Return the recording device id."""
@@ -274,17 +279,17 @@ class Cfg:
     def status_channels(self) -> list:
         """Return the status channels list with complete channel description."""
         return self._status_channels
-    
+
     @property
     def analog_count(self) -> int:
         """Return the number of analog channels."""
         return self._analog_count
-    
+
     @property
     def status_count(self) -> int:
         """Return the number of status channels."""
         return self._status_count
-    
+
     @property
     def time_base(self) -> float:
         """Return the time base."""
@@ -294,12 +299,12 @@ class Cfg:
     def frequency(self) -> float:
         """Return the measured line frequency in Hertz."""
         return self._frequency
-    
+
     @property
     def ft(self) -> str:
         """Return the expected DAT file format."""
         return self._ft
-    
+
     @property
     def timemult(self) -> float:
         """Return the DAT time multiplier (Default = 1)."""
@@ -310,34 +315,34 @@ class Cfg:
         """Returns whether the DAT file must contain non-zero
          timestamp values."""
         return self._timestamp_critical
-    
+
     @property
     def start_timestamp(self) -> dt.datetime:
         """Return the recording start time stamp as a datetime object."""
         return self._start_timestamp
-    
+
     @property
     def trigger_timestamp(self) -> dt.datetime:
         """Return the trigger time stamp as a datetime object."""
         return self._trigger_timestamp
-    
+
     @property
     def nrates(self) -> int:
         """Return the number of different sample rates within the DAT file."""
         return self._nrates
-    
+
     @property
     def sample_rates(self) -> list:
         """
         Return a list with pairs describing the number of samples for a given
         sample rate.
-        """ 
+        """
         return self._sample_rates
 
     # Deprecated properties - Changed "Digital" for "Status"
     @property
     def digital_channels(self) -> list:
-        """Returns the status channels bidimensional values list."""
+        """Returns the status channels bi-dimensional values list."""
         if not self.ignore_warnings:
             warnings.warn(FutureWarning("digital_channels is deprecated, "
                                         "use status_channels instead."))
@@ -364,8 +369,11 @@ class Cfg:
             with open(self.filepath, "r", **kwargs) as cfg:
                 self._read_io(cfg)
         else:
-            raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), 
-                                    self.filepath)
+            raise FileNotFoundError(
+                errno.ENOENT,
+                os.strerror(errno.ENOENT), 
+                self.filepath
+            )
 
     def read(self, cfg_lines):
         """Read CFG-format data of a FileIO or StringIO object."""
@@ -386,7 +394,8 @@ class Cfg:
         line = cfg.readline()
         # station, device, and comtrade standard revision information
         packed = _read_sep_values(line)
-        if 3 == len(packed):
+        pack_len = len(packed)
+        if 3 == pack_len:
             # only 1999 revision and above has the standard revision year
             self._station_name, self._rec_dev_id, self._rev_year = packed
             self._rev_year = self._rev_year.strip()
@@ -395,9 +404,21 @@ class Cfg:
                 if not self.ignore_warnings:
                     msg = WARNING_UNKNOWN_REVISION.format(self._rev_year)
                     warnings.warn(Warning(msg))
-        else:
+        elif pack_len == 2:
             self._station_name, self._rec_dev_id = packed
             self._rev_year = REV_1991
+        else:
+            warnings.warn(
+                (
+                    f"COMTRADE CFG file presents a heading with an {pack_len} "
+                    "fields, more than the expected 3. This may be indication "
+                    "of an invalid COMTRADE file format."
+                ),
+                UserWarning
+            )
+            self._station_name = packed[0]
+            self._rev_year = packed[-1]
+            self._rec_dev_id = ",".join(packed[1:-1])
         line_count = line_count + 1
 
         # Second line
@@ -460,7 +481,7 @@ class Cfg:
             self._timestamp_critical = False
         line_count = line_count + 1
 
-        for inrate in range(self._nrates):
+        for _ in range(self._nrates):
             line = cfg.readline()
             # each sample rate
             samp, endsamp = _read_sep_values(line)
@@ -520,7 +541,7 @@ class Cfg:
 
     def _get_time_base(self, using_nanoseconds: bool):
         """
-        Return the time base, which is based on the fractionary part of the 
+        Return the time base, which is based on the fractionary part of the
         seconds in a timestamp (00.XXXXX).
         """
         if using_nanoseconds:
@@ -538,7 +559,7 @@ class Comtrade:
     EXT_HDR = "hdr"
     # format specific
     ASCII_SEPARATOR = ","
-    
+
     def __init__(self, **kwargs):
         """
         Comtrade object constructor.
@@ -557,6 +578,7 @@ class Comtrade:
         self._status_channel_ids = []
         self._status_phases = []
         self._timestamp_critical = False
+        self._total_samples = 0
 
         # Data types
         if "use_numpy_arrays" in kwargs:
@@ -602,7 +624,7 @@ class Comtrade:
     def hdr(self):
         """Return the HDR file contents."""
         return self._hdr
-    
+
     @property
     def inf(self):
         """Return the INF file contents."""
@@ -612,17 +634,17 @@ class Comtrade:
     def analog_channel_ids(self) -> list:
         """Returns the analog channels name list."""
         return self._analog_channel_ids
-    
+
     @property
     def analog_phases(self) -> list:
         """Returns the analog phase name list."""
         return self._analog_phases
-    
+
     @property
     def status_channel_ids(self) -> list:
         """Returns the status channels name list."""
         return self._status_channel_ids
-    
+
     @property
     def status_phases(self) -> list:
         """Returns the status phase name list."""
@@ -635,12 +657,12 @@ class Comtrade:
 
     @property
     def analog(self) -> list:
-        """Return the analog channel values bidimensional list."""
+        """Return the analog channel values bi-dimensional list."""
         return self._analog_values
-    
+
     @property
     def status(self) -> list:
-        """Return the status channel values bidimensional list."""
+        """Return the status channel values bi-dimensional list."""
         return self._status_values
 
     @property
@@ -702,21 +724,32 @@ class Comtrade:
     def digital_channel_ids(self) -> list:
         """Returns the status channels name list."""
         if not self.ignore_warnings:
-            warnings.warn(FutureWarning("digital_channel_ids is deprecated, use status_channel_ids instead."))
+            warnings.warn(
+                FutureWarning(
+                    "digital_channel_ids is deprecated, use status_channel_ids "
+                    "instead."
+                )
+            )
         return self._status_channel_ids
 
     @property
     def digital(self) -> list:
-        """Returns the status channels bidimensional values list."""
+        """Returns the status channels bi-dimensional values list."""
         if not self.ignore_warnings:
-            warnings.warn(FutureWarning("digital is deprecated, use status instead."))
+            warnings.warn(
+                FutureWarning("digital is deprecated, use status instead.")
+            )
         return self._status_values
 
     @property
     def digital_count(self) -> int:
         """Returns the number of status channels."""
         if not self.ignore_warnings:
-            warnings.warn(FutureWarning("digital_count is deprecated, use status_count instead."))
+            warnings.warn(
+                FutureWarning(
+                    "digital_count is deprecated, use status_count instead."
+                )
+            )
         return self._cfg.status_count
 
     def _get_dat_reader(self):
@@ -734,7 +767,9 @@ class Comtrade:
             dat = Float32DatReader(**dat_kwargs)
         else:
             dat = None
-            raise Exception("Not supported data file format: {}".format(self.ft))
+            raise Exception(
+                f"Not supported data file format: {self.ft}"
+            )
         return dat
 
     def read(self, cfg_lines, dat_lines_or_bytes) -> None:
@@ -745,7 +780,7 @@ class Comtrade:
 
         # channel ids
         self._cfg_extract_channels_ids(self._cfg)
-        
+
         # channel phases
         self._cfg_extract_phases(self._cfg)
 
@@ -758,7 +793,7 @@ class Comtrade:
     def _cfg_extract_channels_ids(self, cfg) -> None:
         self._analog_channel_ids = [channel.name for channel in cfg.analog_channels]
         self._status_channel_ids = [channel.name for channel in cfg.status_channels]
-        
+
     def _cfg_extract_phases(self, cfg) -> None:
         self._analog_phases = [channel.ph for channel in cfg.analog_channels]
         self._status_phases = [channel.ph for channel in cfg.status_channels]
@@ -775,7 +810,7 @@ class Comtrade:
         object. dat_file, inf_file, and hdr_file are optional (Default: None).
 
         cfg_file is the cfg file path, including its extension.
-        dat_file is optional, and may be set if the DAT file name differs from 
+        dat_file is optional, and may be set if the DAT file name differs from
             the CFG file name.
 
         Keyword arguments:
@@ -820,14 +855,16 @@ class Comtrade:
             # check if the CFF file exists
             self._load_cff(cfg_file)
         else:
-            raise Exception(r"Expected CFG file path, got intead \"{}\".".format(cfg_file))
+            raise FileNotFoundError(
+                r"Expected CFG file path, got instead \"{}\".".format(cfg_file)
+            )
 
     def _load_cfg_dat(self, cfg_filepath, dat_filepath, **kwargs):
         self._cfg.load(cfg_filepath, **kwargs)
 
         # channel ids
         self._cfg_extract_channels_ids(self._cfg)
-        
+
         # channel phases
         self._cfg_extract_phases(self._cfg)
 
@@ -866,13 +903,13 @@ class Comtrade:
         hdr_lines = []
         inf_lines = []
         # file type: CFG, HDR, INF, DAT
-        ftype = None
+        file_type = None
         # file format: ASCII, BINARY, BINARY32, FLOAT32
-        fformat = None
+        file_format = None
         if "encoding" not in kwargs and _file_is_utf8(cff_file_path):
             kwargs["encoding"] = "utf-8"
         # Number of bytes for binary/float dat
-        fbytes = 0
+        file_bytes = 0
         with open(cff_file_path, "r", **kwargs) as file:
             header_re = re.compile(CFF_HEADER_REXP)
             last_match = None
@@ -884,39 +921,42 @@ class Comtrade:
                 if mobj is not None:
                     last_match = mobj
                     groups = last_match.groups()
-                    ftype   = groups[0]
+                    file_type   = groups[0]
                     if len(groups) > 1:
-                        fformat = last_match.groups()[1]
+                        file_format = last_match.groups()[1]
                         fbytes_obj = last_match.groups()[2]
-                        fbytes  = int(fbytes_obj) if fbytes_obj is not None else 0
+                        if fbytes_obj is not None:
+                            file_bytes = int(fbytes_obj)
+                        else:
+                            file_bytes = 0
 
-                elif last_match is not None and ftype == "CFG":
+                elif last_match is not None and file_type == "CFG":
                     cfg_lines.append(line.strip())
 
-                elif last_match is not None and ftype == "DAT":
-                    if fformat == TYPE_ASCII:
+                elif last_match is not None and file_type == "DAT":
+                    if file_format == TYPE_ASCII:
                         dat_lines.append(line.strip())
                     else:
                         break
 
-                elif last_match is not None and ftype == "HDR":
+                elif last_match is not None and file_type == "HDR":
                     hdr_lines.append(line.strip())
 
-                elif last_match is not None and ftype == "INF":
+                elif last_match is not None and file_type == "INF":
                     inf_lines.append(line.strip())
 
                 line = file.readline()
 
-        if fformat == TYPE_ASCII:
+        if file_format == TYPE_ASCII:
             # process ASCII CFF data
             self.read("\n".join(cfg_lines), "\n".join(dat_lines))
         else:
             # read dat bytes
             total_bytes = os.path.getsize(cff_file_path)
-            cff_bytes_read = total_bytes - fbytes
+            cff_bytes_read = total_bytes - file_bytes
             with open(cff_file_path, "rb") as file:
                 file.read(cff_bytes_read)
-                dat_bytes = file.read(fbytes)
+                dat_bytes = file.read(file_bytes)
             self.read("\n".join(cfg_lines), dat_bytes)
 
         # stores additional data
@@ -935,9 +975,14 @@ class Comtrade:
         interval_line = "From {} to {} with time mult. = {}"
         format_line = "{} format"
 
-        lines = [header_line.format(self.analog_count, self.status_count,
-                                    self.channels_count),
-                 "Line frequency: {} Hz".format(self.frequency)]
+        lines = [
+            header_line.format(
+                self.analog_count,
+                self.status_count,
+                self.channels_count
+            ),
+            f"Line frequency: {self.frequency} Hz"
+        ]
         for i in range(self._cfg.nrates):
             rate, points = self._cfg.sample_rates[i]
             lines.append(sample_line.format(rate, points))
@@ -975,6 +1020,7 @@ class StatusChannel(Channel):
 
     def __str__(self):
         fields = [str(self.n), self.name, self.ph, self.ccbm, str(self.y)]
+        return ','.join(fields)
 
 
 class AnalogChannel(Channel):
@@ -1183,8 +1229,7 @@ class BinaryDatReader(DatReader):
             self.STRUCT_FORMAT_STATUS_ONLY = "II {dcount:d}H"
 
     def get_reader_format(self, analog_channels, status_bytes):
-        # Number of status fields of 2 bytes based on the total number of 
-        # bytes.
+        # Number of status fields of 2 bytes based on the total number of bytes.
         dcount = math.floor(status_bytes / 2)
         
         # Check the file configuration
@@ -1219,7 +1264,6 @@ class BinaryDatReader(DatReader):
         row_reader = struct.Struct(self.get_reader_format(achannels, dbytes))
 
         # Row reading function.
-        next_row = None
         if isinstance(contents, io.TextIOBase) or \
                 isinstance(contents, io.BufferedIOBase):
             # Read all buffer contents
