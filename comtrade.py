@@ -83,7 +83,7 @@ def _read_sep_values(line, expected: int = -1, default: str = ''):
 
 
 def _preallocate_values(array_type, size, use_numpy_arrays):
-    type_mapping_numpy = {"f": "float32", "i": "int32"}
+    type_mapping_numpy = {"f": "float32", "d": "float64", "i": "int32", "l": "int64"}
     if HAS_NUMPY and use_numpy_arrays:
         return numpy.zeros(size, dtype=type_mapping_numpy[array_type])
     return array.array(array_type, [0]) * size
@@ -573,9 +573,14 @@ class Comtrade:
 
         # Data types
         self._use_numpy_arrays = kwargs.get("use_numpy_arrays", False)
+        self._use_double_precision = kwargs.get("use_double_precision", False)
 
         # DAT file data
-        self._time_values = _preallocate_values("f", 0, self._use_numpy_arrays)
+        self._time_values = _preallocate_values(
+            "d" if self._use_double_precision else "f",
+            0,
+            self._use_numpy_arrays,
+        )
         self._analog_values = []
         self._status_values = []
 
@@ -734,6 +739,7 @@ class Comtrade:
         dat = None
         ft_upper = self.ft.upper()
         dat_kwargs = {"use_numpy_arrays": self._use_numpy_arrays,
+                      "use_double_precision": self._use_double_precision,
                       "rev_year": self.rev_year}
         if ft_upper == TYPE_ASCII:
             dat = AsciiDatReader(**dat_kwargs)
@@ -1027,12 +1033,17 @@ class DatReader:
     def __init__(self, **kwargs):
         """DatReader class constructor."""
         self._use_numpy_arrays = kwargs.get("use_numpy_arrays", False)
+        self._use_double_precision = kwargs.get("use_double_precision", False)
         self._rev_year = kwargs.get("rev_year", REV_2013)
 
         self.file_path = ""
         self._content = None
         self._cfg = None
-        self.time = _preallocate_values("f", 0, self._use_numpy_arrays)
+        self.time = _preallocate_values(
+            "d" if self._use_double_precision else "f",
+            0,
+            self._use_numpy_arrays,
+        )
         self.analog = []
         self.status = []
         self._total_samples = 0
@@ -1082,13 +1093,20 @@ class DatReader:
         status_count = self._cfg.status_count
 
         # preallocate analog and status values
-        self.time = _preallocate_values("f", steps, self._use_numpy_arrays)
+        self.time = _preallocate_values(
+            "d" if self._use_double_precision else "f",
+            steps,
+            self._use_numpy_arrays,
+        )
         self.analog = [None] * analog_count
         self.status = [None] * status_count
         # preallocate each channel values with zeros
         for i in range(analog_count):
-            self.analog[i] = _preallocate_values("f", steps,
-                self._use_numpy_arrays)
+            self.analog[i] = _preallocate_values(
+                "d" if self._use_double_precision else "f",
+                steps,
+                self._use_numpy_arrays,
+            )
         for i in range(status_count):
             self.status[i] = _preallocate_values("i", steps,
                 self._use_numpy_arrays)
