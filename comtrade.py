@@ -1140,6 +1140,9 @@ class AsciiDatReader(DatReader):
 
     def parse(self, contents):
         """Parse a ASCII file contents."""
+        # Check if contents has been read as a io.BytesIO object, if so, decode into a string.
+        contents = contents.decode() if (type(contents) == bytes) else contents
+
         analog_count = self._cfg.analog_count
         status_count = self._cfg.status_count
         time_mult = self._cfg.timemult
