@@ -424,5 +424,17 @@ class TestEncodingHandling(unittest.TestCase):
         self.assertEqual(obj.cfg.rec_dev_id, "Oscilógrafo")
 
 
+class TestExtensionCaseHandling(unittest.TestCase):
+    def test_lower_case(self):
+        self.assertEqual(comtrade._get_same_case(".cfg", ".dat"), ".dat")
+
+    def test_upper_case(self):
+        self.assertEqual(comtrade._get_same_case(".CFG", ".dat"), ".DAT")
+
+    def test_capitalized(self):
+        self.assertEqual(comtrade._get_same_case(".Cfg", ".dat"), ".Dat")
+
+
+
 if __name__ == "__main__":
     unittest.main()

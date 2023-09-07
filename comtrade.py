@@ -141,6 +141,19 @@ def fill_with_zeros_to_the_right(number_str: str, width: int):
     return number_str
 
 
+def _get_same_case(original_ext: str, other_ext: str) -> str:
+    """Returns each other_ext character with the same case as original_ext's."""
+    same_case = ""
+    for i in range(len(original_ext)):
+        if i < len(other_ext):
+            if original_ext[i].isupper():
+                same_case += other_ext[i].upper()
+            else:
+                same_case += other_ext[i].lower()
+        else:
+            break
+    return same_case
+
 def _read_timestamp(timestamp_line: str, rev_year: str, ignore_warnings: bool = False) -> tuple:
     """Process comma separated fields and returns a tuple containing the timestamp
     and a boolean value indicating whether nanoseconds are used.
@@ -798,13 +811,13 @@ class Comtrade:
             basename = cfg_file[:-3]
             # if not informed, infer dat_file with cfg_file
             if dat_file is None:
-                dat_file = cfg_file[:-3] + self.EXT_DAT
+                dat_file = cfg_file[:-3] + _get_same_case(file_ext, self.EXT_DAT)
 
             if inf_file is None:
-                inf_file = basename + self.EXT_INF
+                inf_file = basename + _get_same_case(file_ext, self.EXT_INF)
 
             if hdr_file is None:
-                hdr_file = basename + self.EXT_HDR
+                hdr_file = basename + _get_same_case(file_ext, self.EXT_HDR)
 
             # load both cfg and dat
             file_kwargs = {}
@@ -820,7 +833,7 @@ class Comtrade:
             # check if the CFF file exists
             self._load_cff(cfg_file)
         else:
-            raise Exception(r"Expected CFG file path, got intead \"{}\".".format(cfg_file))
+            raise Exception(r"Expected CFG file path, got instead \"{}\".".format(cfg_file))
 
     def _load_cfg_dat(self, cfg_filepath, dat_filepath, **kwargs):
         self._cfg.load(cfg_filepath, **kwargs)
