@@ -5,9 +5,9 @@ __Python Comtrade__ is a module for Python 3 designed to read _Common Format for
 
 | Standard                               | Revision |
 |:---------------------------------------|:--------:|
-| IEEE C37.111(TM)-1991                  |  1991    |
-| IEEE C37.111(TM)-1999                  |  1999    |
-| IEEE C37.111(TM)-2013 / IEC 60255-24   |  2013    |
+| IEEE C37.111(TM)-1991                  |   1991   |
+| IEEE C37.111(TM)-1999                  |   1999   |
+| IEEE C37.111(TM)-2013 / IEC 60255-24   |   2013   |
 
 
 ## Installation
@@ -111,11 +111,9 @@ Feel free to pull requests implementing one of these unsupported features or fix
 
 * Nanoseconds time base within Python's `datetime` objects (such as `start_timestamp` and `trigger_timestamp` properties). It warns the user but doesn't use it, truncating the numbers.
 * Use of multiple sample rates in time calculations for binary data.
-* Null fields in ASCII data (blank columns).
-* Missing data fields in binary data (`0xFFFF...`) are treated as any other value.
 
 
-### Additional settings
+### Additional settings and features
 
 #### Numpy arrays as data structures
 
@@ -127,6 +125,21 @@ obj = Comtrade(use_numpy_arrays=True)
 ```
 
 It may improve performance for computations after loading data.
+
+
+#### Replace missing data with `float('nan')`
+
+Missing analog values are replaced with `float('nan')`. The value used to represent missing data varies with the 
+Comtrade dat format and revision year. These are listed in the table next.
+
+|  revision  |  format  | Missing Data Value            |
+|:----------:|:--------:|:------------------------------|
+|    1991    |  ascii   | `""` (empty string)           |
+| 1999, 2013 |  ascii   | `99999`                       |
+|    1991    |  binary  | `0xFFFF`                      |
+| 1999, 2013 |  binary  | `0x8000` or `-32768`          |
+|    2013    | binary32 | `0x80000000` or `-2147483648` |
+|    2013    | float32  | minimum negative float value  |
 
 
 #### File encodings
@@ -151,13 +164,7 @@ Feel free to report any bugs you find. You are welcome to fork and submit pull r
 
 To run tests, use Python's `unittest`. From a clone of the GitHub repository, run the command:
 
-#### On Windows
-```
-python -m unittest tests\tests.py
-```
-
-#### On Linux:
-```
+```sh
 python3 -m unittest ./tests/tests.py
 ```
 
