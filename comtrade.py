@@ -154,6 +154,7 @@ def _get_same_case(original_ext: str, other_ext: str) -> str:
             break
     return same_case
 
+
 def _read_timestamp(timestamp_line: str, rev_year: str, ignore_warnings: bool = False) -> tuple:
     """Process comma separated fields and returns a tuple containing the timestamp
     and a boolean value indicating whether nanoseconds are used.
@@ -810,8 +811,9 @@ class Comtrade:
             hdr_file = None
 
         # which extension: CFG or CFF?
-        file_ext = cfg_file[-3:].upper()
-        if file_ext == "CFG":
+        file_ext = cfg_file[-3:]
+        file_ext_upper = file_ext.upper()
+        if file_ext_upper == "CFG":
             basename = cfg_file[:-3]
             # if not informed, infer dat_file with cfg_file
             if dat_file is None:
@@ -834,7 +836,7 @@ class Comtrade:
             self._load_inf(inf_file, **file_kwargs)
             self._load_hdr(hdr_file, **file_kwargs)
 
-        elif file_ext == "CFF":
+        elif file_ext_upper == "CFF":
             # check if the CFF file exists
             self._load_cff(cfg_file)
         else:
