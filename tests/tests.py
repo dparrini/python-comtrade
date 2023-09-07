@@ -430,5 +430,44 @@ class TestEncodingHandling(unittest.TestCase):
         self.assertEqual(obj.cfg.rec_dev_id, "Oscilógrafo")
  
 
+class TestExtensionCaseHandling(unittest.TestCase):
+    def test_lower_case(self):
+        self.assertEqual(comtrade._get_same_case(".cfg", ".dat"), ".dat")
+
+    def test_upper_case(self):
+        self.assertEqual(comtrade._get_same_case(".CFG", ".dat"), ".DAT")
+
+    def test_capitalized(self):
+        self.assertEqual(comtrade._get_same_case(".Cfg", ".dat"), ".Dat")
+
+
+class TestCfgAsciiMissingDataReading(TestCffReading):
+    """CFG and DAT 2013 file pair test case (same content as the CFF test), but
+    this time with the file using ASCII text encoding and empty strings (missing data) on dat file.
+    """
+    def setUp(self):
+        self.comtrade = Comtrade(ignore_warnings=True)
+        self.comtrade.load("tests/sample_files/sample_ascii.cfg", "tests/sample_files/sample_ascii_missing.dat")
+
+    def test_known_missing_values(self):
+        self.assertTrue(math.isnan(self.comtrade.analog[0][1]))
+        self.assertTrue(math.isnan(self.comtrade.analog[1][2]))
+        self.assertTrue(math.isnan(self.comtrade.analog[2][3]))
+        self.assertTrue(math.isnan(self.comtrade.analog[3][4]))
+
+
+class TestCfgBinaryMissingDataReading(unittest.TestCase):
+    """Binary dat file with missing data (0xFFFF values)."""
+    def setUp(self):
+        self.comtrade = Comtrade(ignore_warnings=True)
+        self.comtrade.load("tests/sample_files/sample_bin.cfg", "tests/sample_files/sample_bin_missing.dat")
+
+    def test_known_missing_values(self):
+        self.assertTrue(math.isnan(self.comtrade.analog[0][0]))
+        self.assertTrue(math.isnan(self.comtrade.analog[1][1]))
+        self.assertTrue(math.isnan(self.comtrade.analog[2][2]))
+        self.assertTrue(math.isnan(self.comtrade.analog[3][3]))
+
+
 if __name__ == "__main__":
     unittest.main()

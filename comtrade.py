@@ -141,6 +141,19 @@ def fill_with_zeros_to_the_right(number_str: str, width: int):
     return number_str
 
 
+def _get_same_case(original_ext: str, other_ext: str) -> str:
+    """Returns each other_ext character with the same case as original_ext's."""
+    same_case = ""
+    for i in range(len(original_ext)):
+        if i < len(other_ext):
+            if original_ext[i].isupper():
+                same_case += other_ext[i].upper()
+            else:
+                same_case += other_ext[i].lower()
+        else:
+            break
+    return same_case
+
 def _read_timestamp(timestamp_line: str, rev_year: str, ignore_warnings: bool = False) -> tuple:
     """Process comma separated fields and returns a tuple containing the timestamp
     and a boolean value indicating whether nanoseconds are used.
@@ -218,7 +231,7 @@ class Cfg:
         # Default CFG data
         self._station_name = ""
         self._rec_dev_id = ""
-        self._rev_year = 2013
+        self._rev_year = REV_2013
         self._channels_count = 0
         self._analog_channels = []
         self._status_channels = []
@@ -256,7 +269,7 @@ class Cfg:
         return self._rec_dev_id
 
     @property
-    def rev_year(self) -> int:
+    def rev_year(self) -> str:
         """Return the COMTRADE revision year."""
         return self._rev_year
 
@@ -559,10 +572,7 @@ class Comtrade:
         self._timestamp_critical = False
 
         # Data types
-        if "use_numpy_arrays" in kwargs:
-            self._use_numpy_arrays = kwargs["use_numpy_arrays"]
-        else:
-            self._use_numpy_arrays = False
+        self._use_numpy_arrays = kwargs.get("use_numpy_arrays", False)
 
         # DAT file data
         self._time_values = _preallocate_values("f", 0, self._use_numpy_arrays)
@@ -720,10 +730,11 @@ class Comtrade:
         return self._cfg.status_count
 
     def _get_dat_reader(self):
-        # case insensitive comparison of file format
+        # case-insensitive comparison of file format
         dat = None
         ft_upper = self.ft.upper()
-        dat_kwargs = {"use_numpy_arrays": self._use_numpy_arrays}
+        dat_kwargs = {"use_numpy_arrays": self._use_numpy_arrays,
+                      "rev_year": self.rev_year}
         if ft_upper == TYPE_ASCII:
             dat = AsciiDatReader(**dat_kwargs)
         elif ft_upper == TYPE_BINARY:
@@ -798,13 +809,13 @@ class Comtrade:
             basename = cfg_file[:-3]
             # if not informed, infer dat_file with cfg_file
             if dat_file is None:
-                dat_file = cfg_file[:-3] + self.EXT_DAT
+                dat_file = cfg_file[:-3] + _get_same_case(file_ext, self.EXT_DAT)
 
             if inf_file is None:
-                inf_file = basename + self.EXT_INF
+                inf_file = basename + _get_same_case(file_ext, self.EXT_INF)
 
             if hdr_file is None:
-                hdr_file = basename + self.EXT_HDR
+                hdr_file = basename + _get_same_case(file_ext, self.EXT_HDR)
 
             # load both cfg and dat
             file_kwargs = {}
@@ -821,7 +832,7 @@ class Comtrade:
             # check if the CFF file exists
             self._load_cff(cfg_file)
         else:
-            raise Exception(r"Expected CFG file path, got intead \"{}\".".format(cfg_file))
+            raise Exception(r"Expected CFG file path, got instead \"{}\".".format(cfg_file))
 
     def _load_cfg(self, cfg_filepath, **kwargs):
         self._cfg.load(cfg_filepath, **kwargs)
@@ -1015,10 +1026,9 @@ class DatReader:
 
     def __init__(self, **kwargs):
         """DatReader class constructor."""
-        if "use_numpy_arrays" in kwargs:
-            self._use_numpy_arrays = kwargs["use_numpy_arrays"]
-        else:
-            self._use_numpy_arrays = False
+        self._use_numpy_arrays = kwargs.get("use_numpy_arrays", False)
+        self._rev_year = kwargs.get("rev_year", REV_2013)
+
         self.file_path = ""
         self._content = None
         self._cfg = None
@@ -1026,6 +1036,9 @@ class DatReader:
         self.analog = []
         self.status = []
         self._total_samples = 0
+
+        # To be replaced by subclasses.
+        self.DATA_MISSING = None
 
     @property
     def total_samples(self):
@@ -1093,7 +1106,6 @@ class DatReader:
                   time_multiplier: float):
         # TODO: add option to enforce dat file timestamp, when available.
         # TODO: make tests.
-        ts = 0
         sample_rate = self._get_samp(n)
         if not self._cfg.timestamp_critical or ts_value == TIMESTAMP_MISSING:
             # if the timestamp is missing, use calculated.
@@ -1103,8 +1115,11 @@ class DatReader:
                 raise Exception("Missing timestamp and no sample rate "
                                 "provided.")
         else:
-            # Use provided timestamp if its not missing
+            # Use provided timestamp if it's not missing
             return ts_value * time_base * time_multiplier
+
+    def filter_missing(self, value) -> float:
+        return float(value) if value != self.DATA_MISSING else float('nan')
 
     def parse(self, contents):
         """Virtual method, parse DAT file contents."""
@@ -1118,7 +1133,10 @@ class AsciiDatReader(DatReader):
         super().__init__(**kwargs)
         self.ASCII_SEPARATOR = SEPARATOR
 
-        self.DATA_MISSING = ""
+        if self._rev_year == REV_1991:
+            self.DATA_MISSING = ""
+        else:
+            self.DATA_MISSING = "99999"
 
     def parse(self, contents):
         """Parse a ASCII file contents."""
@@ -1149,7 +1167,8 @@ class AsciiDatReader(DatReader):
             ts_val = float(values[1])
             ts = self._get_time(n, ts_val, time_base, time_mult)
 
-            avalues = [float(x)*a[i] + b[i] for i, x in enumerate(values[2:analog_count+2])]
+            avalues = [value*a[i] + b[i] if not math.isnan(value) else float('nan')
+                       for i, value in enumerate(map(self.filter_missing, values[2:analog_count+2]))]
             svalues = [int(x) for x in values[len(values)-status_count:]]
 
             # store
@@ -1170,8 +1189,10 @@ class BinaryDatReader(DatReader):
         self.TIME_BYTES = 4
         self.SAMPLE_NUMBER_BYTES = 4
 
-        # maximum negative value
-        self.DATA_MISSING = 0xFFFF
+        if self._rev_year == REV_1991:
+            self.DATA_MISSING = -1  # 0xFFFF
+        else:
+            self.DATA_MISSING = -32768  # 0x8000
 
         self.read_mode = "rb"
 
@@ -1240,8 +1261,8 @@ class BinaryDatReader(DatReader):
 
             # Extract analog channel values.
             for ichannel in range(achannels):
-                yint = values[ichannel + 2]
-                y = a[ichannel] * yint + b[ichannel]
+                yint = self.filter_missing(values[ichannel + 2])
+                y = a[ichannel] * yint + b[ichannel] if not math.isnan(yint) else float('nan')
                 self.analog[ichannel][irow] = y
 
             # Extract status channel values.
@@ -1276,7 +1297,7 @@ class Binary32DatReader(BinaryDatReader):
             self.STRUCT_FORMAT_ANALOG_ONLY = "II {acount:d}i"
 
         # maximum negative value
-        self.DATA_MISSING = 0xFFFFFFFF
+        self.DATA_MISSING = -2147483648  # 0x80000000
 
 
 class Float32DatReader(BinaryDatReader):
