@@ -810,7 +810,8 @@ class Comtrade:
             file_kwargs = {}
             if "encoding" in kwargs:
                 file_kwargs["encoding"] = kwargs["encoding"]
-            self._load_cfg_dat(cfg_file, dat_file, **file_kwargs)
+            self._load_cfg(cfg_file, **file_kwargs)
+            self._load_dat(dat_file)
 
             # Load additional inf and hdr files, if they exist.
             self._load_inf(inf_file, **file_kwargs)
@@ -822,7 +823,7 @@ class Comtrade:
         else:
             raise Exception(r"Expected CFG file path, got intead \"{}\".".format(cfg_file))
 
-    def _load_cfg_dat(self, cfg_filepath, dat_filepath, **kwargs):
+    def _load_cfg(self, cfg_filepath, **kwargs):
         self._cfg.load(cfg_filepath, **kwargs)
 
         # channel ids
@@ -830,9 +831,10 @@ class Comtrade:
         
         # channel phases
         self._cfg_extract_phases(self._cfg)
-
+    
+    def _load_dat(self, dat_filepath):
         dat = self._get_dat_reader()
-        dat.load(dat_filepath, self._cfg, **kwargs)
+        dat.load(dat_filepath, self._cfg)
 
         # copy dat object information
         self._dat_extract_data(dat)
