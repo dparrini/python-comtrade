@@ -43,6 +43,7 @@ except ModuleNotFoundError:
 # COMTRADE standard revisions
 REV_1991 = "1991"
 REV_1999 = "1999"
+REV_2001 = "2001"
 REV_2013 = "2013"
 
 # DAT file format types
@@ -405,7 +406,7 @@ class Cfg:
             self._station_name, self._rec_dev_id, self._rev_year = packed
             self._rev_year = self._rev_year.strip()
 
-            if self._rev_year not in (REV_1991, REV_1999, REV_2013):
+            if self._rev_year not in (REV_1991, REV_1999, REV_2001, REV_2013):
                 if not self.ignore_warnings:
                     msg = WARNING_UNKNOWN_REVISION.format(self._rev_year)
                     warnings.warn(Warning(msg))
@@ -511,7 +512,7 @@ class Cfg:
         line_count = line_count + 1
 
         # Timestamp multiplication factor
-        if self._rev_year in (REV_1999, REV_2013):
+        if self._rev_year in (REV_1999, REV_2001, REV_2013):
             line = cfg.readline().strip()
             if len(line) > 0:
                 self._time_multiplier = float(line)

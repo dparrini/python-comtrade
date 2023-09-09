@@ -3,11 +3,12 @@
 __Python Comtrade__ is a module for Python 3 designed to read _Common Format for Transient Data Exchange_ (COMTRADE) files. These consists of oscillography data recorded during power system outages, control systems tests, validation and tests of field equipment, protective relaying logs, etc. The COMTRADE format is defined by IEEE Standards, summarized in the table below. Some equipment vendors put additional information in proprietary versions of it. This module aims IEEE definitions but may support those proprietary versions.
 
 
-| Standard                               | Revision |
-|:---------------------------------------|:--------:|
-| IEEE C37.111(TM)-1991                  |   1991   |
-| IEEE C37.111(TM)-1999                  |   1999   |
-| IEEE C37.111(TM)-2013 / IEC 60255-24   |   2013   |
+| Standard                                  | Revision |
+|:------------------------------------------|:--------:|
+| IEEE C37.111(TM)-1991                     |   1991   |
+| IEEE C37.111(TM)-1999                     |   1999   |
+| IEC 60255-24:2001                         |   2001   |
+| IEEE C37.111(TM)-2013 / IEC 60255-24:2013 |   2013   |
 
 
 ## Installation
@@ -29,7 +30,7 @@ The examples below shows how to open both CFG and DAT files or the new CFF file 
 
 Comtrade files separated in CFG and DAT formats can also be read with `Comtrade.load`. A `CFG` file path must be passed as an argument and, optionaly, a `DAT` file path too (if the file name is not equal of the CFG file).
 
-```py
+```python
 import matplotlib.pyplot as plt
 from comtrade import Comtrade
 
@@ -50,7 +51,7 @@ Their contents are available through `Comtrade.hdr` and `Comtrade.inf` propertie
 
 ### CFF files (2013 revision)
 
-```py
+```python
 import matplotlib.pyplot as plt
 from comtrade import Comtrade
 
@@ -80,31 +81,31 @@ This module implements some of the functionality described in each of the Standa
 
 Feel free to pull requests implementing one of these unsupported features or fixing bugs.
 
-| Formats                                               | 1991 |  1999 | 2013 | Module Support  |
-|:------------------------------------------------------|:----:|:-----:|:----:|:---------------:|
-| CFG file format                                       | x    | x     | x    | x               |
-| DAT file format                                       | x    | x     | x    | x               |
-| HDR file format                                       | x    | x     | x    | no              |
-| INF file format                                       |      | x     | x    | no              |
-| CFF file format                                       |      |       | x    | x               |
-| ASCII data file format                                | x    | x     | x    | x               |
-| Binary data file format                               | x    | x     | x    | x               |
-| Binary32 data file format                             |      |       | x    | x               |
-| Float32 data file format                              |      |       | x    | x               |
-| Schema for phasor data                                |      |       | x    | no              |
+| Formats                                               | 1991 | 1999  | 2001 | 2013 | Module Support  |
+|:------------------------------------------------------|:----:|:-----:|------|:----:|:---------------:|
+| CFG file format                                       | x    | x     | x    | x    | x               |
+| DAT file format                                       | x    | x     | x    | x    | x               |
+| HDR file format                                       | x    | x     | x    | x    | no              |
+| INF file format                                       |      | x     | x    | x    | no              |
+| CFF file format                                       |      |       |      | x    | x               |
+| ASCII data file format                                | x    | x     | x    | x    | x               |
+| Binary data file format                               | x    | x     | x    | x    | x               |
+| Binary32 data file format                             |      |       |      | x    | x               |
+| Float32 data file format                              |      |       |      | x    | x               |
+| Schema for phasor data                                |      |       |      | x    | no              |
 
 
-| Features                                              | 1991 |  1999 | 2013 | Module Support  |
-|:------------------------------------------------------|:----:|:-----:|:----:|:---------------:|
-| COMTRADE standard revision                            |      | x     | x    | x               |
-| Timestamp multiplication factor                       |      | x     | x    | x               |
-| Time code and local code                              |      |       | x    | x               |
-| Time quality of the samples                           |      |       | x    | x               |
-| Analog channel time skew                              |      | x     | x    | Partial         |
-| Analog channel primary and secondary VT or CT ratio   |      | x     | x    | x               |
-| Status channel phase and monitored circuit            |      | x     | x    | x               |
-| Multiple sample rates                                 | x    | x     | x    | Partial         |
-| Nanoseconds scale                                     |      |       | x    | x               |
+| Features                                              | 1991 | 1999 | 2001 | 2013 | Module Support  |
+|:------------------------------------------------------|:----:|:----:|------|:----:|:---------------:|
+| COMTRADE standard revision                            |      |  x   | x    | x    | x               |
+| Timestamp multiplication factor                       |      |  x   | x    | x    | x               |
+| Time code and local code                              |      |      |      | x    | x               |
+| Time quality of the samples                           |      |      |      | x    | x               |
+| Analog channel time skew                              |      |  x   | x    | x    | Partial         |
+| Analog channel primary and secondary VT or CT ratio   |      |  x   | x    | x    | x               |
+| Status channel phase and monitored circuit            |      |  x   | x    | x    | x               |
+| Multiple sample rates                                 | x    |  x   | x    | x    | Partial         |
+| Nanoseconds scale                                     |      |      | x    | x    | x               |
 
 
 ### Unsupported features
