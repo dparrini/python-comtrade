@@ -137,8 +137,8 @@ class TestCfg1Reading(unittest.TestCase):
                          dt.datetime(2000, 1, 1, 10, 30, 0, 722000, None))
 
     def test_time_base(self):
-        self.assertEqual(self.comtrade.time_base, 
-                         self.comtrade.cfg.TIME_BASE_MICROSEC)
+        self.assertEqual(self.comtrade.time_base,
+                         self.comtrade.cfg.TIME_BASE_MICRO_SEC)
 
     def test_ft(self):
         self.assertEqual(self.comtrade.ft, "ASCII")
@@ -183,7 +183,7 @@ class TestCfg1LazyReading(unittest.TestCase):
 
     def test_time_base(self):
         self.assertEqual(self.comtrade.time_base,
-                         self.comtrade.cfg.TIME_BASE_MICROSEC)
+                         self.comtrade.cfg.TIME_BASE_MICRO_SEC)
 
     def test_ft(self):
         self.assertEqual(self.comtrade.ft, "ASCII")
@@ -220,8 +220,8 @@ class TestCffReading(unittest.TestCase):
         self.assertEqual(self.comtrade.total_samples, 40)
 
     def test_time_base(self):
-        self.assertEqual(self.comtrade.time_base, 
-            self.comtrade.cfg.TIME_BASE_MICROSEC)
+        self.assertEqual(self.comtrade.time_base,
+                         self.comtrade.cfg.TIME_BASE_MICRO_SEC)
 
     def test_ft(self):
         self.assertEqual(self.comtrade.ft, "ASCII")
@@ -266,7 +266,7 @@ class TestCfgAsciiEncodingReading(TestCffReading):
 
 
 class TestBinaryReading(unittest.TestCase):
-    dat_format = comtrade.TYPE_BINARY
+    dat_format = comtrade._TYPE_BINARY
     filename = "temp_binary"
 
     def parseAnalog(self, analog_value):
@@ -353,15 +353,15 @@ class TestBinaryReading(unittest.TestCase):
                          dt.datetime(2019, 1, 1, 0, 0, 2, 0, None))
 
     def test_time_base(self):
-        self.assertEqual(self.comtrade.time_base, 
-            self.comtrade.cfg.TIME_BASE_NANOSEC)
+        self.assertEqual(self.comtrade.time_base,
+                         self.comtrade.cfg.TIME_BASE_NANO_SEC)
 
     def test_ft(self):
         self.assertEqual(self.comtrade.ft, self.dat_format)
 
 
 class TestBinary32Reading(TestBinaryReading):
-    dat_format = comtrade.TYPE_BINARY32
+    dat_format = comtrade._TYPE_BINARY32
     filename = "temp_binary32"
 
     def parseAnalog(self, analog_value):
@@ -375,7 +375,7 @@ class TestBinary32Reading(TestBinaryReading):
 
 
 class TestFloat32Reading(TestBinaryReading):
-    dat_format = comtrade.TYPE_FLOAT32
+    dat_format = comtrade._TYPE_FLOAT32
     filename = "temp_float32"
 
     def parseAnalog(self, analog_value):
@@ -414,8 +414,7 @@ class TestRealBinaryReading(unittest.TestCase):
 
 class TestEncodingHandling(unittest.TestCase):
     def test_loading_utf8(self):
-        obj = comtrade.Comtrade()
-        obj.load(
+        obj = comtrade.load(
             "tests/sample_files/sample_ascii_utf-8.cfg",
             "tests/sample_files/sample_ascii.dat",
             encoding="utf-8",
@@ -424,14 +423,12 @@ class TestEncodingHandling(unittest.TestCase):
         self.assertEqual(obj.cfg.rec_dev_id, "IED123")
 
     def test_loading_iso8859_1(self):
-        obj = comtrade.Comtrade()
-        obj.load("tests/sample_files/sample_iso8859-1.cfg", encoding="iso-8859-1")
+        obj = comtrade.load("tests/sample_files/sample_iso8859-1.cfg", encoding="iso-8859-1")
         self.assertEqual(obj.cfg.station_name, "Estação de Medição")
         self.assertEqual(obj.cfg.rec_dev_id, "Oscilógrafo")
     
     def test_loading_iso8859_1_bin(self):
-        obj = comtrade.Comtrade()
-        obj.load("tests/sample_files/sample_iso8859-1_bin.cfg", encoding="iso-8859-1")
+        obj = comtrade.load("tests/sample_files/sample_iso8859-1_bin.cfg", encoding="iso-8859-1")
         self.assertEqual(obj.cfg.station_name, "Estação de Medição")
         self.assertEqual(obj.cfg.rec_dev_id, "Oscilógrafo")
  

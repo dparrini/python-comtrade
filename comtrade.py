@@ -31,6 +31,7 @@ import os
 import re
 import struct
 import sys
+from typing import Union
 import warnings
 
 try:
@@ -47,31 +48,31 @@ REV_2001 = "2001"
 REV_2013 = "2013"
 
 # DAT file format types
-TYPE_ASCII = "ASCII"
-TYPE_BINARY = "BINARY"
-TYPE_BINARY32 = "BINARY32"
-TYPE_FLOAT32 = "FLOAT32"
+_TYPE_ASCII = "ASCII"
+_TYPE_BINARY = "BINARY"
+_TYPE_BINARY32 = "BINARY32"
+_TYPE_FLOAT32 = "FLOAT32"
 
 # Special values
-TIMESTAMP_MISSING = 0xFFFFFFFF
+_TIMESTAMP_MISSING = 0xFFFFFFFF
 
 # CFF headers
-CFF_HEADER_REXP = r"(?i)--- file type: ([a-z]+)(?:\s+([a-z0-9]+)(?:\s*\:\s*([0-9]+))?)? ---$"
+_CFF_HEADER_REXP = r"(?i)--- file type: ([a-z]+)(?:\s+([a-z0-9]+)(?:\s*\:\s*([0-9]+))?)? ---$"
 
 # common separator character of data fields of CFG and ASCII DAT files
-SEPARATOR = ","
+_SEPARATOR = ","
 
 # timestamp regular expression
-re_date = re.compile(r"([0-9]{1,2})/([0-9]{1,2})/([0-9]{2,4})")
-re_time = re.compile(r"([0-9]{1,2}):([0-9]{2}):([0-9]{2})(\.([0-9]{1,12}))?")
+_re_date = re.compile(r"([0-9]{1,2})/([0-9]{1,2})/([0-9]{2,4})")
+_re_time = re.compile(r"([0-9]{1,2}):([0-9]{2}):([0-9]{2})(\.([0-9]{1,12}))?")
 
 # Non-standard revision warning
-WARNING_UNKNOWN_REVISION = "Unknown standard revision \"{}\""
+_WARNING_UNKNOWN_REVISION = "Unknown standard revision \"{}\""
 # Date time with nanoseconds resolution warning
-WARNING_DATETIME_NANO = "Unsupported datetime objects with nanoseconds \
+_WARNING_DATETIME_NANO = "Unsupported datetime objects with nanoseconds \
 resolution. Using truncated values."
 # Date time with year 0, month 0 and/or day 0.
-WARNING_MINDATE = "Missing date values. Using minimum values: {}."
+_WARNING_MIN_DATE = "Missing date values. Using minimum values: {}."
 
 
 class ComtradeError(Exception):
@@ -79,7 +80,7 @@ class ComtradeError(Exception):
 
 
 def _read_sep_values(line, expected: int = -1, default: str = ''):
-    values = tuple(map(lambda cell: cell.strip(), line.split(SEPARATOR)))
+    values = tuple(map(lambda cell: cell.strip(), line.split(_SEPARATOR)))
     if expected == -1 or len(values) == expected:
         return values
     return [values[i] if i < len(values) else default
@@ -101,7 +102,7 @@ def _prevent_null(str_value: str, value_type: type, default_value):
 
 
 def _get_date(date_str: str) -> tuple:
-    m = re_date.match(date_str)
+    m = _re_date.match(date_str)
     if m is not None:
         day = int(m.group(1))
         month = int(m.group(2))
@@ -111,27 +112,27 @@ def _get_date(date_str: str) -> tuple:
 
 
 def _get_time(time_str: str, ignore_warnings: bool = False) -> tuple:
-    m = re_time.match(time_str)
+    m = _re_time.match(time_str)
     if m is not None:
         hour = int(m.group(1))
         minute = int(m.group(2))
         second = int(m.group(3))
-        fracsec_str = m.group(5)
+        frac_sec_str = m.group(5)
         # Pad fraction of seconds with 0s to the right
-        if len(fracsec_str) <= 6:
-            fracsec_str = fill_with_zeros_to_the_right(fracsec_str, 6)
+        if len(frac_sec_str) <= 6:
+            frac_sec_str = fill_with_zeros_to_the_right(frac_sec_str, 6)
         else:
-            fracsec_str = fill_with_zeros_to_the_right(fracsec_str, 9)
+            frac_sec_str = fill_with_zeros_to_the_right(frac_sec_str, 9)
 
-        frac_second = int(fracsec_str)
-        in_nanoseconds = len(fracsec_str) > 6
+        frac_second = int(frac_sec_str)
+        in_nanoseconds = len(frac_sec_str) > 6
         microsecond = frac_second
 
         if in_nanoseconds:
             # Nanoseconds resolution is not supported by datetime module, so it's
             # converted to integer below.
             if not ignore_warnings:
-                warnings.warn(Warning(WARNING_DATETIME_NANO))
+                warnings.warn(Warning(_WARNING_DATETIME_NANO))
             microsecond = int(microsecond * 1E-3)
         return hour, minute, second, microsecond, in_nanoseconds
 
@@ -165,7 +166,7 @@ def _read_timestamp(timestamp_line: str, rev_year: str, ignore_warnings: bool = 
     Can possibly return the timestamp 00/00/0000 00:00:00.000 for empty strings
     or empty pairs."""
     day, month, year, hour, minute, second, microsecond = (0,) * 7
-    nanosec = False
+    nano_sec = False
     if len(timestamp_line.strip()) > 0:
         values = _read_sep_values(timestamp_line, 2)
         if len(values) >= 2:
@@ -179,7 +180,7 @@ def _read_timestamp(timestamp_line: str, rev_year: str, ignore_warnings: bool = 
                     day, month, year = _get_date(date_str)
             if len(time_str.strip()) > 0:
                 hour, minute, second, microsecond, \
-                    nanosec = _get_time(time_str, ignore_warnings)
+                    nano_sec = _get_time(time_str, ignore_warnings)
 
     using_min_data = False
     if year <= 0:
@@ -196,8 +197,8 @@ def _read_timestamp(timestamp_line: str, rev_year: str, ignore_warnings: bool = 
     timestamp = dt.datetime(year, month, day, hour, minute, second,
                             microsecond, tzinfo)
     if not ignore_warnings and using_min_data:
-        warnings.warn(Warning(WARNING_MINDATE.format(str(timestamp))))
-    return timestamp, nanosec
+        warnings.warn(Warning(_WARNING_MIN_DATE.format(str(timestamp))))
+    return timestamp, nano_sec
 
 
 def _file_is_utf8(file_path):
@@ -209,8 +210,8 @@ def _file_is_utf8(file_path):
 
 def _stream_is_utf8(stream):
     try:
-        contents = stream.readlines()
-    except UnicodeDecodeError as exception:
+        stream.readlines()
+    except UnicodeDecodeError:
         return True
     return False
 
@@ -218,8 +219,8 @@ def _stream_is_utf8(stream):
 class Cfg:
     """Parses and stores Comtrade's CFG data."""
     # time base units
-    TIME_BASE_NANOSEC = 1E-9
-    TIME_BASE_MICROSEC = 1E-6
+    TIME_BASE_NANO_SEC = 1E-9
+    TIME_BASE_MICRO_SEC = 1E-6
 
     def __init__(self, **kwargs):
         """
@@ -229,9 +230,9 @@ class Cfg:
         ignore_warnings -- whether warnings are displayed in stdout 
             (default: False)
         """
-        self.filename = ""
+        self._file_path = None
         # implicit data
-        self._time_base = self.TIME_BASE_MICROSEC
+        self._time_base = self.TIME_BASE_MICRO_SEC
 
         # Default CFG data
         self._station_name = ""
@@ -248,7 +249,7 @@ class Cfg:
         self._timestamp_critical = False
         self._start_timestamp = dt.datetime(1900, 1, 1)
         self._trigger_timestamp = dt.datetime(1900, 1, 1)
-        self._ft = TYPE_ASCII
+        self._ft = _TYPE_ASCII
         self._time_multiplier = 1.0
         # 2013 standard revision information
         # time_code,local_code = 0,0 means local time is UTC
@@ -258,10 +259,12 @@ class Cfg:
         self._tmq_code = 0
         self._leap_second = 0
 
-        if "ignore_warnings" in kwargs:
-            self.ignore_warnings = kwargs["ignore_warnings"]
-        else:
-            self.ignore_warnings = False
+        self._ignore_warnings = kwargs.get("ignore_warnings", False)
+
+    @property
+    def file_path(self) -> Union[str, None]:
+        """Return the CFG file path."""
+        return self._file_path
 
     @property
     def station_name(self) -> str:
@@ -356,7 +359,7 @@ class Cfg:
     @property
     def digital_channels(self) -> list:
         """Returns the status channels bidimensional values list."""
-        if not self.ignore_warnings:
+        if not self._ignore_warnings:
             warnings.warn(FutureWarning("digital_channels is deprecated, "
                                         "use status_channels instead."))
         return self._status_channels
@@ -364,26 +367,26 @@ class Cfg:
     @property
     def digital_count(self) -> int:
         """Returns the number of status channels."""
-        if not self.ignore_warnings:
+        if not self._ignore_warnings:
             warnings.warn(FutureWarning("digital_count is deprecated, "
                                         "use status_count instead."))
         return self._status_count
 
-    def load(self, filepath, **user_kwargs):
+    def load(self, filepath, **kwargs):
         """Load and read a CFG file contents."""
-        self.filepath = filepath
+        self._file_path = filepath
 
-        if os.path.isfile(self.filepath):
-            kwargs = {}
-            if "encoding" not in user_kwargs and _file_is_utf8(self.filepath):
-                kwargs["encoding"] = "utf-8"
-            elif "encoding" in user_kwargs:
-                kwargs["encoding"] = user_kwargs["encoding"]
-            with open(self.filepath, "r", **kwargs) as cfg:
+        if os.path.isfile(self._file_path):
+            filtered_kwargs = {}
+            if "encoding" not in kwargs and _file_is_utf8(self._file_path):
+                filtered_kwargs["encoding"] = "utf-8"
+            elif "encoding" in kwargs:
+                filtered_kwargs["encoding"] = kwargs["encoding"]
+            with open(self._file_path, "r", **filtered_kwargs) as cfg:
                 self._read_io(cfg)
         else:
             raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT),
-                                    self.filepath)
+                                    self._file_path)
 
     def read(self, cfg_lines):
         """Read CFG-format data of a FileIO or StringIO object."""
@@ -410,8 +413,8 @@ class Cfg:
             self._rev_year = self._rev_year.strip()
 
             if self._rev_year not in (REV_1991, REV_1999, REV_2001, REV_2013):
-                if not self.ignore_warnings:
-                    msg = WARNING_UNKNOWN_REVISION.format(self._rev_year)
+                if not self._ignore_warnings:
+                    msg = _WARNING_UNKNOWN_REVISION.format(self._rev_year)
                     warnings.warn(Warning(msg))
         else:
             self._station_name, self._rec_dev_id = packed
@@ -493,7 +496,7 @@ class Cfg:
         self._start_timestamp, nanosec = _read_timestamp(
             ts_str,
             self.rev_year,
-            self.ignore_warnings
+            self._ignore_warnings
         )
         self._time_base = self._get_time_base(nanosec)
         line_count = line_count + 1
@@ -504,7 +507,7 @@ class Cfg:
         self._trigger_timestamp, nanosec = _read_timestamp(
             ts_str,
             self.rev_year,
-            self.ignore_warnings
+            self._ignore_warnings
         )
         self._time_base = min([self.time_base, self._get_time_base(nanosec)])
         line_count = line_count + 1
@@ -534,7 +537,6 @@ class Cfg:
                 line = cfg.readline()
                 # time_code and local_code
                 self._tmq_code, self._leap_second = _read_sep_values(line)
-                line_count = line_count + 1
 
     def _get_time_base(self, using_nanoseconds: bool):
         """
@@ -542,9 +544,9 @@ class Cfg:
         seconds in a timestamp (00.XXXXX).
         """
         if using_nanoseconds:
-            return self.TIME_BASE_NANOSEC
+            return self.TIME_BASE_NANO_SEC
         else:
-            return self.TIME_BASE_MICROSEC
+            return self.TIME_BASE_MICRO_SEC
 
 
 class Comtrade:
@@ -609,7 +611,7 @@ class Comtrade:
         return self._cfg.rec_dev_id
 
     @property
-    def rev_year(self) -> int:
+    def rev_year(self) -> str:
         """Return the COMTRADE revision year."""
         return self._cfg.rev_year
 
@@ -741,21 +743,19 @@ class Comtrade:
 
     def _get_dat_reader(self):
         # case-insensitive comparison of file format
-        dat = None
         ft_upper = self.ft.upper()
         dat_kwargs = {"use_numpy_arrays": self._use_numpy_arrays,
                       "use_double_precision": self._use_double_precision,
                       "rev_year": self.rev_year}
-        if ft_upper == TYPE_ASCII:
-            dat = AsciiDatReader(**dat_kwargs)
-        elif ft_upper == TYPE_BINARY:
-            dat = BinaryDatReader(**dat_kwargs)
-        elif ft_upper == TYPE_BINARY32:
-            dat = Binary32DatReader(**dat_kwargs)
-        elif ft_upper == TYPE_FLOAT32:
-            dat = Float32DatReader(**dat_kwargs)
+        if ft_upper == _TYPE_ASCII:
+            dat = _AsciiDatReader(**dat_kwargs)
+        elif ft_upper == _TYPE_BINARY:
+            dat = _BinaryDatReader(**dat_kwargs)
+        elif ft_upper == _TYPE_BINARY32:
+            dat = _Binary32DatReader(**dat_kwargs)
+        elif ft_upper == _TYPE_FLOAT32:
+            dat = _Float32DatReader(**dat_kwargs)
         else:
-            dat = None
             raise ComtradeError("Not supported data file format: {}".format(self.ft))
         return dat
 
@@ -774,7 +774,7 @@ class Comtrade:
         dat = self._get_dat_reader()
         dat.read(dat_lines_or_bytes, self._cfg)
 
-        # copy dat object information
+        # copy .dat object information
         self._dat_extract_data(dat)
 
     def _cfg_extract_channels_ids(self, cfg) -> None:
@@ -791,7 +791,7 @@ class Comtrade:
         self._status_values = dat.status
         self._total_samples = dat.total_samples
 
-    def load(self, cfg_file, dat_file=None, **kwargs) -> None:
+    def load(self, cfg_file, dat_file=None, **kwargs) -> "Comtrade":
         """
         Load CFG, DAT, INF, and HDR files. Each must be a FileIO or StringIO
         object. dat_file, inf_file, and hdr_file are optional (Default: None).
@@ -814,7 +814,7 @@ class Comtrade:
             # check if the CFF file exists
             self._load_cff(cfg_file)
 
-        if file_ext_upper == "CFG":
+        elif file_ext_upper == "CFG":
             basename = cfg_file[:-3]
             # if not informed, infer dat_file with cfg_file
             if dat_file is None:
@@ -840,6 +840,8 @@ class Comtrade:
         else:
             raise ComtradeError(r"Expected CFG file path, instead got \"{}\".".format(cfg_file))
 
+        return self
+
     def _load_cfg(self, cfg_filepath, **kwargs):
         self._cfg.load(cfg_filepath, **kwargs)
 
@@ -853,7 +855,7 @@ class Comtrade:
         dat = self._get_dat_reader()
         dat.load(dat_filepath, self._cfg)
 
-        # copy dat object information
+        # copy .dat object information
         self._dat_extract_data(dat)
 
     def _load_inf(self, inf_file, **kwargs):
@@ -890,10 +892,10 @@ class Comtrade:
         fformat = None
         if "encoding" not in kwargs and _file_is_utf8(cff_file_path):
             kwargs["encoding"] = "utf-8"
-        # Number of bytes for binary/float dat
+        # Number of bytes for binary/float .dat
         fbytes = 0
         with open(cff_file_path, "r", **kwargs) as file:
-            header_re = re.compile(CFF_HEADER_REXP)
+            header_re = re.compile(_CFF_HEADER_REXP)
             last_match = None
             line_number = 0
             line = file.readline()
@@ -913,7 +915,7 @@ class Comtrade:
                     cfg_lines.append(line.strip())
 
                 elif last_match is not None and ftype == "DAT":
-                    if fformat == TYPE_ASCII:
+                    if fformat == _TYPE_ASCII:
                         dat_lines.append(line.strip())
                     else:
                         break
@@ -926,11 +928,11 @@ class Comtrade:
 
                 line = file.readline()
 
-        if fformat == TYPE_ASCII:
+        if fformat == _TYPE_ASCII:
             # process ASCII CFF data
             self.read("\n".join(cfg_lines), "\n".join(dat_lines))
         else:
-            # read dat bytes
+            # read .dat number of bytes
             total_bytes = os.path.getsize(cff_file_path)
             cff_bytes_read = total_bytes - fbytes
             with open(cff_file_path, "rb") as file:
@@ -996,13 +998,14 @@ class StatusChannel(Channel):
 
     def __str__(self):
         fields = [str(self.n), self.name, self.ph, self.ccbm, str(self.y)]
+        return ','.join(fields)
 
 
 class AnalogChannel(Channel):
     """Holds analog channel description data."""
 
-    def __init__(self, n: int, a: float, b=0.0, skew=0.0, cmin=-32767,
-                 cmax=32767, name='', uu='', ph='', ccbm='', primary=1.0,
+    def __init__(self, n: int, a: float, b=0.0, skew=0.0, cmin=-32767.0,
+                 cmax=32767.0, name='', uu='', ph='', ccbm='', primary=1.0,
                  secondary=1.0, pors='P'):
         """AnalogChannel class constructor."""
         super().__init__(n, name, ph, ccbm)
@@ -1029,7 +1032,7 @@ class AnalogChannel(Channel):
         return ','.join(fields)
 
 
-class DatReader:
+class _DatReader:
     """Abstract DatReader class. Used to parse DAT file contents."""
     read_mode = "r"
 
@@ -1128,13 +1131,13 @@ class DatReader:
         # TODO: add option to enforce dat file timestamp, when available.
         # TODO: make tests.
         sample_rate = self._get_samp(n)
-        if not self._cfg.timestamp_critical or ts_value == TIMESTAMP_MISSING:
+        if not self._cfg.timestamp_critical or ts_value == _TIMESTAMP_MISSING:
             # if the timestamp is missing, use calculated.
             if sample_rate != 0.0:
                 return (n - 1) / sample_rate
             else:
                 raise ComtradeError("Missing timestamp and no sample rate "
-                                "provided.")
+                                    "provided.")
         else:
             # Use provided timestamp if it's not missing
             return ts_value * time_base * time_multiplier
@@ -1147,13 +1150,13 @@ class DatReader:
         pass
 
 
-class AsciiDatReader(DatReader):
+class _AsciiDatReader(_DatReader):
     """ASCII format DatReader subclass."""
 
     def __init__(self, **kwargs):
         # Call the initialization for the inherited class
         super().__init__(**kwargs)
-        self.ASCII_SEPARATOR = SEPARATOR
+        self.ASCII_SEPARATOR = _SEPARATOR
 
         if self._rev_year == REV_1991:
             self.DATA_MISSING = ""
@@ -1162,7 +1165,7 @@ class AsciiDatReader(DatReader):
 
     def parse(self, contents):
         """Parse a ASCII file contents."""
-        # Check if contents has been read as a io.BytesIO object, if so, decode into a string.
+        # Check if contents has been read as an io.BytesIO object, if so, decode into a string.
         contents = contents.decode() if (type(contents) == bytes) else contents
 
         analog_count = self._cfg.analog_count
@@ -1204,7 +1207,7 @@ class AsciiDatReader(DatReader):
                 self.status[i][line_number - 1] = svalues[i]
 
 
-class BinaryDatReader(DatReader):
+class _BinaryDatReader(_DatReader):
     """16-bit binary format DatReader subclass."""
 
     def __init__(self, **kwargs):
@@ -1258,17 +1261,13 @@ class BinaryDatReader(DatReader):
         a = [x.a for x in self._cfg.analog_channels]
         b = [x.b for x in self._cfg.analog_channels]
 
-        sample_id_bytes = self.SAMPLE_NUMBER_BYTES + self.TIME_BYTES
-        abytes = achannels * self.ANALOG_BYTES
         dbytes = self.STATUS_BYTES * math.ceil(schannel / 16.0)
-        bytes_per_row = sample_id_bytes + abytes + dbytes
         groups_of_16bits = math.floor(dbytes / self.STATUS_BYTES)
 
         # Struct format.
         row_reader = struct.Struct(self.get_reader_format(achannels, dbytes))
 
         # Row reading function.
-        next_row = None
         if isinstance(contents, io.TextIOBase) or \
                 isinstance(contents, io.BufferedIOBase):
             # Read all buffer contents
@@ -1308,7 +1307,7 @@ class BinaryDatReader(DatReader):
             irow += 1
 
 
-class Binary32DatReader(BinaryDatReader):
+class _Binary32DatReader(_BinaryDatReader):
     """32-bit binary format DatReader subclass."""
 
     def __init__(self, **kwargs):
@@ -1327,7 +1326,7 @@ class Binary32DatReader(BinaryDatReader):
         self.DATA_MISSING = -2147483648  # 0x80000000
 
 
-class Float32DatReader(BinaryDatReader):
+class _Float32DatReader(_BinaryDatReader):
     """Single precision (float) binary format DatReader subclass."""
 
     def __init__(self, **kwargs):
@@ -1344,3 +1343,8 @@ class Float32DatReader(BinaryDatReader):
 
         # Maximum negative value
         self.DATA_MISSING = sys.float_info.min
+
+
+def load(cfg_or_cff_file_path, dat_file_path=None, **kwargs) -> Comtrade:
+    """Load and read a CFG file contents."""
+    return Comtrade(**kwargs).load(cfg_or_cff_file_path, dat_file_path, **kwargs)

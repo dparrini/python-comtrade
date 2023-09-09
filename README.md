@@ -25,17 +25,15 @@ Or just copy `comtrade.py` from this repository.
 The examples below shows how to open both CFG and DAT files or the new CFF file to plot (using `pyplot`) analog channel oscillography.
 
 
-
 ### CFG and DAT files (all revisions)
 
-Comtrade files separated in CFG and DAT formats can also be read with `Comtrade.load`. A `CFG` file path must be passed as an argument and, optionaly, a `DAT` file path too (if the file name is not equal of the CFG file).
+Comtrade files separated in CFG and DAT formats can also be read with `load` function. A `CFG` file path must be passed as an argument and, optionally, a `DAT` file path too (if the file name is not equal of the CFG file).
 
 ```python
 import matplotlib.pyplot as plt
-from comtrade import Comtrade
+import comtrade
 
-rec = Comtrade()
-rec.load("sample_files/sample_ascii.cfg", "sample_files/sample_ascii.dat")
+rec = comtrade.load("sample_files/sample_ascii.cfg", "sample_files/sample_ascii.dat")
 print("Trigger time = {}s".format(rec.trigger_time))
 
 plt.figure()
@@ -53,10 +51,9 @@ Their contents are available through `Comtrade.hdr` and `Comtrade.inf` propertie
 
 ```python
 import matplotlib.pyplot as plt
-from comtrade import Comtrade
+import comtrade
 
-rec = Comtrade()
-rec.load("sample_files/sample_ascii.cff")
+rec = comtrade.load("sample_files/sample_ascii.cff")
 print("Trigger time = {}s".format(rec.trigger_time))
 
 plt.figure()
@@ -66,7 +63,7 @@ plt.legend([rec.analog_channel_ids[0], rec.analog_channel_ids[1]])
 plt.show()
 ```
 
-A `Comtrade` class must be instantiated and the method `load` called with the `CFF` file path.
+The module function `load` must be called with the `CFF` file path specified.
 
 `Comtrade.analog` and `Comtrade.status` lists stores analog and status channel sample lists respectively. These can be accessed through zero-based indexes, i.e., `Comtrade.analog[0]`. The list `Comtrade.time` stores each sample time in seconds.
 
@@ -82,7 +79,7 @@ This module implements some of the functionality described in each of the Standa
 Feel free to pull requests implementing one of these unsupported features or fixing bugs.
 
 | Formats                                               | 1991 | 1999  | 2001 | 2013 | Module Support  |
-|:------------------------------------------------------|:----:|:-----:|------|:----:|:---------------:|
+|:------------------------------------------------------|:----:|:-----:|:----:|:----:|:---------------:|
 | CFG file format                                       | x    | x     | x    | x    | x               |
 | DAT file format                                       | x    | x     | x    | x    | x               |
 | HDR file format                                       | x    | x     | x    | x    | no              |
@@ -148,8 +145,8 @@ Comtrade dat format and revision year. These are listed in the table next.
 Specify the `encoding` as a keyword argument on all load methods as you'd specify for common file loading:
 
 ```python
-rec = Comtrade()
-rec.load("sample_files/sample_ascii.cff", encoding="iso-8859-1")
+import comtrade
+comtrade.load("sample_files/sample_ascii.cff", encoding="iso-8859-1")
 ```
 
 
