@@ -227,10 +227,10 @@ class TestCffReading(unittest.TestCase):
         self.assertEqual(self.comtrade.ft, "ASCII")
 
     def test_hdr(self):
-        self.assertIsNone(self.comtrade.hdr)
+        self.assertEqual(self.comtrade.hdr, "")
 
     def test_inf(self):
-        self.assertIsNone(self.comtrade.inf)
+        self.assertEqual(self.comtrade.inf, "")
 
 
 class TestCfg2Reading(TestCffReading):
@@ -245,6 +245,26 @@ class TestCfg2Reading(TestCffReading):
 
     def test_inf(self):
         self.assertIsNone(self.comtrade.inf)
+
+
+class TestCffFloat32Reading(unittest.TestCase):
+    """Sample CFF file with float32 .dat contents.
+    """
+    def setUp(self):
+        self.comtrade = comtrade.load("tests/sample_files/sample_float32.cff",
+                                      ignore_warnings=True)
+
+    def test_hdr(self):
+        self.assertEqual(len(self.comtrade.hdr.split("\n")), 4)
+
+    def test_inf(self):
+        self.assertEqual(len(self.comtrade.inf.split("\n")), 1)
+
+    def test_cfg(self):
+        self.assertEqual(self.comtrade.station_name, "EXAMPLE")
+        self.assertEqual(self.comtrade.rec_dev_id, "example")
+        self.assertEqual(self.comtrade.analog_count, 1)
+        self.assertEqual(self.comtrade.status_count, 1)
 
 
 class TestCfgAsciiEncodingReading(TestCffReading):
@@ -444,13 +464,16 @@ class TestExtensionCaseHandling(unittest.TestCase):
         self.assertEqual(comtrade._get_same_case(".Cfg", ".dat"), ".Dat")
 
 
-class TestCfgAsciiMissingDataReading(TestCffReading):
+class TestCfgAsciiMissingDataReading(TestCfgAsciiEncodingReading):
     """CFG and DAT 2013 file pair test case (same content as the CFF test), but
     this time with the file using ASCII text encoding and empty strings (missing data) on dat file.
     """
     def setUp(self):
         self.comtrade = Comtrade(ignore_warnings=True)
         self.comtrade.load("tests/sample_files/sample_ascii.cfg", "tests/sample_files/sample_ascii_missing.dat")
+
+    def test_station(self):
+        pass
 
     def test_known_missing_values(self):
         self.assertTrue(math.isnan(self.comtrade.analog[0][1]))

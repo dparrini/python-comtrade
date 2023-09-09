@@ -880,74 +880,73 @@ class Comtrade:
         else:
             self._hdr = None
 
+    @staticmethod
+    def _read_mixed_text_bin_data_as_text(cff_file) -> str:
+        chunk_delimiter = b"\n"
+        current_chunk = []
+        while True:
+            current_value = cff_file.read(1)
+            if not current_value:
+                break
+            if current_value != chunk_delimiter:
+                current_chunk.append(current_value)
+            else:
+                yield b"".join(current_chunk).decode("utf-8", errors="ignore").strip()
+                current_chunk = []
+
     def _load_cff(self, cff_file_path: str, **kwargs):
         # stores each file type lines
         cfg_lines = []
         dat_lines = []
         hdr_lines = []
         inf_lines = []
-        # file type: CFG, HDR, INF, DAT
-        ftype = None
-        # file format: ASCII, BINARY, BINARY32, FLOAT32
-        fformat = None
-        if "encoding" not in kwargs and _file_is_utf8(cff_file_path):
-            kwargs["encoding"] = "utf-8"
-        # Number of bytes for binary/float .dat
-        fbytes = 0
-        with open(cff_file_path, "r", **kwargs) as file:
-            header_re = re.compile(_CFF_HEADER_REXP)
-            last_match = None
+        header_re = re.compile(_CFF_HEADER_REXP)
+
+        with open(cff_file_path, "rb") as cff_file:
+            # file type: CFG, HDR, INF, DAT
+            ftype = None
+            # file format: ASCII, BINARY, BINARY32, FLOAT32
+            fformat = None
+
             line_number = 0
-            line = file.readline()
-            while line != "":
+            last_match = None
+            for current_line in self._read_mixed_text_bin_data_as_text(cff_file):
                 line_number += 1
-                mobj = header_re.match(line.strip().upper())
+                mobj = header_re.match(current_line.strip().upper())
                 if mobj is not None:
                     last_match = mobj
                     groups = last_match.groups()
                     ftype = groups[0]
-                    if len(groups) > 1:
-                        fformat = last_match.groups()[1]
-                        fbytes_obj = last_match.groups()[2]
-                        fbytes = int(fbytes_obj) if fbytes_obj is not None else 0
+                    if groups[1] is not None:
+                        fformat = groups[1]
+                        fbytes_obj = groups[2]
+                        if ftype == "DAT" and fformat != _TYPE_ASCII:
+                            break
 
                 elif last_match is not None and ftype == "CFG":
-                    cfg_lines.append(line.strip())
-
-                elif last_match is not None and ftype == "DAT":
-                    if fformat == _TYPE_ASCII:
-                        dat_lines.append(line.strip())
-                    else:
-                        break
+                    cfg_lines.append(current_line.strip())
 
                 elif last_match is not None and ftype == "HDR":
-                    hdr_lines.append(line.strip())
+                    hdr_lines.append(current_line.strip())
 
                 elif last_match is not None and ftype == "INF":
-                    inf_lines.append(line.strip())
+                    inf_lines.append(current_line.strip())
 
-                line = file.readline()
+                elif last_match is not None and ftype == "DAT" and fformat == _TYPE_ASCII:
+                    dat_lines.append(current_line.strip())
 
-        if fformat == _TYPE_ASCII:
-            # process ASCII CFF data
-            self.read("\n".join(cfg_lines), "\n".join(dat_lines))
-        else:
-            # read .dat number of bytes
-            total_bytes = os.path.getsize(cff_file_path)
-            cff_bytes_read = total_bytes - fbytes
-            with open(cff_file_path, "rb") as file:
-                file.read(cff_bytes_read)
-                dat_bytes = file.read(fbytes)
-            self.read("\n".join(cfg_lines), dat_bytes)
+            if fformat == _TYPE_ASCII:
+                # process ASCII CFF data
+                self.read("\n".join(cfg_lines), "\n".join(dat_lines))
+            else:
+                # read remaining data as .dat values.
+                dat_bytes = cff_file.read()
+                self.read("\n".join(cfg_lines), dat_bytes)
 
         # stores additional data
         self._hdr = "\n".join(hdr_lines)
-        if len(self._hdr) == 0:
-            self._hdr = None
 
         self._inf = "\n".join(inf_lines)
-        if len(self._inf) == 0:
-            self._inf = None
 
     def cfg_summary(self):
         """Returns the CFG attributes summary string."""
