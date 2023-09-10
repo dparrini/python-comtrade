@@ -19,6 +19,12 @@ pip install comtrade
 
 Or just copy `comtrade.py` from this repository.
 
+### Requirements
+
+- Python 3.6 or newer
+- (optional) numpy for speed improvement
+- (optional) pandas for data frame support
+
 
 ## How to Use
 
@@ -70,6 +76,23 @@ The module function `load` must be called with the `CFF` file path specified.
 More information can be accessed through `Comtrade.cfg` object, which stores data such as detailed channel information.
 
 Data of additional sections, such as HDR and INF, can be accessed through `hdr` and `inf` properties, respectively.
+
+
+### Data frames
+
+The module supports the use of `pandas.DataFrame` as a data structure. Use the conveninent function `load_as_dataframe` or call
+`Comtrade.to_dataframe()` function after loading the data.
+
+```python
+import comtrade
+df = comtrade.load_as_dataframe("sample_files/sample_ascii.cfg")
+print(df.head())
+
+# Or, alternatively
+rec = comtrade.load("sample_files/sample_ascii.cfg")
+df = rec.to_dataframe()
+print(df.head())
+```
 
 
 ## Features

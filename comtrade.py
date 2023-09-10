@@ -37,9 +37,17 @@ import warnings
 try:
     import numpy
 
-    HAS_NUMPY = True
+    _HAS_NUMPY = True
 except ModuleNotFoundError:
-    HAS_NUMPY = False
+    _HAS_NUMPY = False
+
+try:
+    import pandas as pd
+
+    _HAS_PANDAS = True
+except ModuleNotFoundError:
+    _HAS_PANDAS = False
+
 
 # COMTRADE standard revisions
 REV_1991 = "1991"
@@ -89,7 +97,7 @@ def _read_sep_values(line, expected: int = -1, default: str = ''):
 
 def _preallocate_values(array_type, size, use_numpy_arrays):
     type_mapping_numpy = {"f": "float32", "d": "float64", "i": "int32", "l": "int64"}
-    if HAS_NUMPY and use_numpy_arrays:
+    if _HAS_NUMPY and use_numpy_arrays:
         return numpy.zeros(size, dtype=type_mapping_numpy[array_type])
     return array.array(array_type, [0]) * size
 
@@ -786,6 +794,24 @@ class Comtrade:
         self._status_values = dat.status
         self._total_samples = dat.total_samples
 
+    def to_dataframe(self, **kwargs) -> "pd.DataFrame":
+        """Return a pandas DataFrame object with comtrade data."""
+        if _HAS_PANDAS:
+            index_type = kwargs.get("index_type", "time")
+            data = {
+                "time": self.time,
+            }
+            data.update({self.analog_channel_ids[i]: self.analog[i] for i in range(self.analog_count)})
+            data.update({self.status_channel_ids[i]: self.status[i] for i in range(self.status_count)})
+            df = pd.DataFrame(data)
+
+            if index_type == "time":
+                df.set_index("time", inplace=True)
+            elif index_type == "sample":
+                pass
+            return df
+        raise ComtradeError("pandas package is not installed.")
+
     def load(self, cfg_file, dat_file=None, **kwargs) -> "Comtrade":
         """
         Load CFG, DAT, INF, and HDR files. Each must be a FileIO or StringIO
@@ -1337,5 +1363,13 @@ class _Float32DatReader(_BinaryDatReader):
 
 
 def load(cfg_or_cff_file_path, dat_file_path=None, **kwargs) -> Comtrade:
-    """Load and read a CFG file contents."""
+    """Load and read comtrade files contents."""
     return Comtrade(**kwargs).load(cfg_or_cff_file_path, dat_file_path, **kwargs)
+
+
+def load_as_dataframe(cfg_or_cff_file_path, dat_file_path=None, **kwargs) -> "pd.DataFrame":
+    """Load and read comtrade files contents and returns a dataframe."""
+    return Comtrade(**kwargs).load(cfg_or_cff_file_path,
+                                   dat_file_path,
+                                   use_numpy_arrays=True, **kwargs).to_dataframe(**kwargs)
+
