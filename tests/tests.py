@@ -256,6 +256,14 @@ class TestCfg2Reading(TestCffReading):
         self.assertIsNone(self.comtrade.inf)
 
 
+class TestCfgWithSubCharsReading(TestCfg2Reading):
+    """CFG and DAT 2013 file pair test case, but cfg has <sub> characters.
+    """
+    def setUp(self):
+        self.comtrade = Comtrade(ignore_warnings=True).load("tests/sample_files/sample_sub_char.cfg",
+                                                            "tests/sample_files/sample_ascii.dat")
+
+
 class TestCffFloat32Reading(unittest.TestCase):
     """Sample CFF file with float32 .dat contents.
     """

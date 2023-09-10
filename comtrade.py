@@ -216,6 +216,18 @@ def _stream_is_utf8(stream):
     return False
 
 
+def _eof_strip(line: str) -> str:
+    """Strip line of whitespace and <sub> (0x1A) control character that may appear
+     appended to the end of text files on some platforms."""
+    return _replace_sub(line).strip()
+
+
+def _replace_sub(line: str) -> str:
+    """Replace <sub> (0x1A) control character that may appear appended to the end
+    of text files on some platforms."""
+    return line.replace(chr(0x1A), "")
+
+
 class Cfg:
     """Parses and stores Comtrade's CFG data."""
     # time base units
@@ -519,7 +531,7 @@ class Cfg:
 
         # Timestamp multiplication factor
         if self._rev_year in (REV_1999, REV_2001, REV_2013):
-            line = cfg.readline().strip()
+            line = _eof_strip(cfg.readline())
             if len(line) > 0:
                 self._time_multiplier = float(line)
             else:
@@ -528,13 +540,13 @@ class Cfg:
 
         # time_code and local_code
         if self._rev_year == REV_2013:
-            line = cfg.readline()
+            line = _eof_strip(cfg.readline())
 
             if line:
                 self._time_code, self._local_code = _read_sep_values(line)
                 line_count = line_count + 1
 
-                line = cfg.readline()
+                line = _eof_strip(cfg.readline())
                 # time_code and local_code
                 self._tmq_code, self._leap_second = _read_sep_values(line)
 
@@ -863,7 +875,7 @@ class Comtrade:
             if "encoding" not in kwargs and _file_is_utf8(self.file_path):
                 kwargs["encoding"] = "utf-8"
             with open(inf_file, 'r', **kwargs) as file:
-                self._inf = file.read()
+                self._inf = _replace_sub(file.read())
                 if len(self._inf) == 0:
                     self._inf = None
         else:
@@ -874,7 +886,7 @@ class Comtrade:
             if "encoding" not in kwargs and _file_is_utf8(self.file_path):
                 kwargs["encoding"] = "utf-8"
             with open(hdr_file, 'r', **kwargs) as file:
-                self._hdr = file.read()
+                self._hdr = _replace_sub(file.read())
                 if len(self._hdr) == 0:
                     self._hdr = None
         else:
