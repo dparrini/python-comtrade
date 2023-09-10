@@ -201,21 +201,6 @@ def _read_timestamp(timestamp_line: str, rev_year: str, ignore_warnings: bool = 
     return timestamp, nano_sec
 
 
-def _file_is_utf8(file_path):
-    if os.path.exists(file_path):
-        with open(file_path, "r") as file:
-            return _stream_is_utf8(file)
-    return False
-
-
-def _stream_is_utf8(stream):
-    try:
-        stream.readlines()
-    except UnicodeDecodeError:
-        return True
-    return False
-
-
 def _eof_strip(line: str) -> str:
     """Strip line of whitespace and <sub> (0x1A) control character that may appear
      appended to the end of text files on some platforms."""
@@ -389,11 +374,9 @@ class Cfg:
         self._file_path = filepath
 
         if os.path.isfile(self._file_path):
-            filtered_kwargs = {}
-            if "encoding" not in kwargs and _file_is_utf8(self._file_path):
-                filtered_kwargs["encoding"] = "utf-8"
-            elif "encoding" in kwargs:
-                filtered_kwargs["encoding"] = kwargs["encoding"]
+            filtered_kwargs = {
+                "encoding": kwargs.get("encoding", "utf-8")
+            }
             with open(self._file_path, "r", **filtered_kwargs) as cfg:
                 self._read_io(cfg)
         else:
@@ -872,8 +855,7 @@ class Comtrade:
 
     def _load_inf(self, inf_file, **kwargs):
         if os.path.exists(inf_file):
-            if "encoding" not in kwargs and _file_is_utf8(self.file_path):
-                kwargs["encoding"] = "utf-8"
+            kwargs["encoding"] = kwargs.get("encoding", "utf-8")
             with open(inf_file, 'r', **kwargs) as file:
                 self._inf = _replace_sub(file.read())
                 if len(self._inf) == 0:
@@ -883,8 +865,7 @@ class Comtrade:
 
     def _load_hdr(self, hdr_file, **kwargs):
         if os.path.exists(hdr_file):
-            if "encoding" not in kwargs and _file_is_utf8(self.file_path):
-                kwargs["encoding"] = "utf-8"
+            kwargs["encoding"] = kwargs.get("encoding", "utf-8")
             with open(hdr_file, 'r', **kwargs) as file:
                 self._hdr = _replace_sub(file.read())
                 if len(self._hdr) == 0:
@@ -962,7 +943,7 @@ class Comtrade:
 
     def cfg_summary(self):
         """Returns the CFG attributes summary string."""
-        header_line = "Channels (total,A,D): {}A + {}D = {}"
+        header_line = "Channels (Analog,Digital,Total): {}A + {}D = {}"
         sample_line = "Sample rate of {} Hz to the sample #{}"
         interval_line = "From {} to {} with time mult. = {}"
         format_line = "{} format"
@@ -1081,8 +1062,7 @@ class _DatReader:
             # extract CFG file information regarding data dimensions
             self._cfg = cfg
             self._preallocate()
-            if "encoding" not in kwargs and self.read_mode != "rb" and \
-                    _file_is_utf8(self.file_path):
+            if "encoding" not in kwargs and self.read_mode != "rb":
                 kwargs["encoding"] = "utf-8"
             with open(self.file_path, self.read_mode, **kwargs) as contents:
                 self.parse(contents)
