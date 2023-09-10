@@ -64,7 +64,7 @@ _SEPARATOR = ","
 
 # timestamp regular expression
 _re_date = re.compile(r"([0-9]{1,2})/([0-9]{1,2})/([0-9]{2,4})")
-_re_time = re.compile(r"([0-9]{1,2}):([0-9]{2}):([0-9]{2})(\.([0-9]{1,12}))?")
+_re_time = re.compile(r"([0-9]{1,2}):([0-9]{2}):([0-9]{1,2})(.([0-9]{1,12}))?")
 
 # Non-standard revision warning
 _WARNING_UNKNOWN_REVISION = "Unknown standard revision \"{}\""

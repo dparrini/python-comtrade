@@ -57,22 +57,18 @@ COMTRADE_SAMPLE_4_DAT_FILE = "tests/sample_files/sample_bin.dat"
 
 class TestTimestamp(unittest.TestCase):
     """Test timestamp parsing."""
-    def setUp(self):
-        self.complete_date = "01/01/2000"
-        self.complete_time = "10:30:00.228000"
-        self.incomplete_fraction_date = "01/01/2020"
-        self.incomplete_fraction_time = "00:00:00.23"
-        self.nanoseconds = "00:00:00.123456789"
 
     def test_complete_date(self):
-        day, month, year = comtrade._get_date(self.complete_date)
+        complete_date = "01/01/2000"
+        day, month, year = comtrade._get_date(complete_date)
         self.assertEqual(day, 1)
         self.assertEqual(month, 1)
         self.assertEqual(year, 2000)
 
     def test_complete_time(self):
+        complete_time = "10:30:00.228000"
         hour, minute, second, microsecond, \
-            in_nanoseconds = comtrade._get_time(self.complete_time)
+            in_nanoseconds = comtrade._get_time(complete_time)
         self.assertEqual(hour, 10)
         self.assertEqual(minute, 30)
         self.assertEqual(second, 0)
@@ -80,8 +76,9 @@ class TestTimestamp(unittest.TestCase):
         self.assertFalse(in_nanoseconds)
 
     def test_incomplete_fraction_time(self):
+        incomplete_fraction_time = "00:00:00.23"
         hour, minute, second, microsecond, \
-            in_nanoseconds = comtrade._get_time(self.incomplete_fraction_time)
+            in_nanoseconds = comtrade._get_time(incomplete_fraction_time)
         self.assertEqual(hour, 0)
         self.assertEqual(minute, 0)
         self.assertEqual(second, 0)
@@ -89,14 +86,26 @@ class TestTimestamp(unittest.TestCase):
         self.assertFalse(in_nanoseconds)
 
     def test_nanoseconds(self):
-        ignore = True
+        nanoseconds = "00:00:00.123456789"
+        ignore_warnings = True
         hour, minute, second, microsecond, \
-            in_nanoseconds = comtrade._get_time(self.nanoseconds, ignore)
+            in_nanoseconds = comtrade._get_time(nanoseconds, ignore_warnings)
         self.assertEqual(hour, 0)
         self.assertEqual(minute, 0)
         self.assertEqual(second, 0)
         self.assertEqual(microsecond, 123456)  # s the decimal .789
         self.assertTrue(in_nanoseconds)
+
+    def test_incomplete_seconds(self):
+        incomplete_seconds = "01:02:3.012345"
+        ignore_warnings = True
+        hour, minute, second, microsecond, \
+            in_nanoseconds = comtrade._get_time(incomplete_seconds, ignore_warnings)
+        self.assertEqual(hour, 1)
+        self.assertEqual(minute, 2)
+        self.assertEqual(second, 3)
+        self.assertEqual(microsecond, 12345)  # s the decimal .789
+        self.assertFalse(in_nanoseconds)
 
 
 class TestCfg1Reading(unittest.TestCase):
