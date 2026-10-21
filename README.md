@@ -190,6 +190,7 @@ From a clone of the GitHub repository, run the tests and the linter with [uv](ht
 
 ```sh
 uv run pytest
+uv run --extra numpy pytest  # also runs the numpy array tests
 uv run ruff check
 ```
 
