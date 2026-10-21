@@ -164,3 +164,6 @@ cython_debug/
 #.idea/
 
 # End of https://www.toptal.com/developers/gitignore/api/python
+
+# uv (library: dev dependencies are resolved fresh, not locked)
+uv.lock

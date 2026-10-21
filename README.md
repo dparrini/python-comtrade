@@ -21,9 +21,9 @@ Or just copy `comtrade.py` from this repository.
 
 ### Requirements
 
-- Python 3.6 or newer
-- (optional) numpy for speed improvement
-- (optional) pandas for data frame support
+- Python 3.11 or newer
+- (optional) numpy for speed improvement: `pip install "comtrade[numpy]"`
+- (optional) pandas for data frame support: `pip install "comtrade[pandas]"`
 
 
 ## How to Use
@@ -73,6 +73,8 @@ The module function `load` must be called with the `CFF` file path specified.
 
 `Comtrade.analog` and `Comtrade.status` lists stores analog and status channel sample lists respectively. These can be accessed through zero-based indexes, i.e., `Comtrade.analog[0]`. The list `Comtrade.time` stores each sample time in seconds.
 
+Analog channels may have a time skew (in microseconds) from the start of the sample period, which is not included in `Comtrade.time`. The list `Comtrade.analog_time` stores the time values of each analog channel, with its skew, in seconds, i.e., `Comtrade.analog_time[0]` for `Comtrade.analog[0]`.
+
 More information can be accessed through `Comtrade.cfg` object, which stores data such as detailed channel information.
 
 Data of additional sections, such as HDR and INF, can be accessed through `hdr` and `inf` properties, respectively.
@@ -121,17 +123,16 @@ Feel free to pull requests implementing one of these unsupported features or fix
 | Timestamp multiplication factor                       |      |  x   | x    | x    | x               |
 | Time code and local code                              |      |      |      | x    | x               |
 | Time quality of the samples                           |      |      |      | x    | x               |
-| Analog channel time skew                              |      |  x   | x    | x    | Partial         |
+| Analog channel time skew                              |      |  x   | x    | x    | x               |
 | Analog channel primary and secondary VT or CT ratio   |      |  x   | x    | x    | x               |
 | Status channel phase and monitored circuit            |      |  x   | x    | x    | x               |
-| Multiple sample rates                                 | x    |  x   | x    | x    | Partial         |
+| Multiple sample rates                                 | x    |  x   | x    | x    | x               |
 | Nanoseconds scale                                     |      |      | x    | x    | x               |
 
 
 ### Unsupported features
 
 * Nanoseconds time base within Python's `datetime` objects (such as `start_timestamp` and `trigger_timestamp` properties). It warns the user but doesn't use it, truncating the numbers.
-* Use of multiple sample rates in time calculations for binary data.
 
 
 ### Additional settings and features
@@ -145,7 +146,9 @@ in `Comtrade` object constructor:
 obj = Comtrade(use_numpy_arrays=True)
 ```
 
-It may improve performance for computations after loading data.
+It may improve performance for computations after loading data. It also speeds up loading binary
+DAT files (`BINARY`, `BINARY32` and `FLOAT32` formats), which are converted with vectorized numpy
+operations.
 
 
 #### Replace missing data with `float('nan')`
@@ -183,11 +186,27 @@ Feel free to report any bugs you find. You are welcome to fork and submit pull r
 
 ## Development
 
-To run tests, use Python's `unittest`. From a clone of the GitHub repository, run the command:
+From a clone of the GitHub repository, run the tests and the linter with [uv](https://docs.astral.sh/uv/):
 
 ```sh
-python3 -m unittest ./tests/tests.py
+uv run pytest
+uv run ruff check
 ```
+
+Or, with pip 25.1 or newer:
+
+```sh
+python -m pip install -e . --group dev
+python -m pytest
+```
+
+### Releasing
+
+1. Update `__version__` in `comtrade.py` and push the commit to `master`.
+2. Publish a GitHub release tagged with that same version, e.g. `gh release create 0.1.3 --generate-notes`.
+
+The `Release` workflow then runs CI and uploads the sdist and wheel to PyPI using
+[Trusted Publishing](https://docs.pypi.org/trusted-publishers/), so no API token is needed.
 
 ## License
 
