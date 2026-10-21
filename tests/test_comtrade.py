@@ -3,6 +3,7 @@ import math
 import os
 import struct
 import unittest
+from unittest import mock
 import comtrade
 from comtrade import Comtrade
 
@@ -722,6 +723,86 @@ class TestAnalogChannelSkewBinary(TestAnalogChannelSkew):
 class TestAnalogChannelSkewNumpy(TestAnalogChannelSkew):
     """Skewed analog channels using numpy arrays."""
     use_numpy_arrays = True
+
+
+def _channel_values(obj) -> list:
+    """Time, analog and status values lists of a record, with None for NaN
+    (since NaN != NaN)."""
+    return [[None if math.isnan(value) else value for value in values]
+            for values in [obj.time] + obj.analog + obj.status]
+
+
+class TestAsciiBlockReading(unittest.TestCase):
+    """ASCII DAT file read in blocks of a few lines."""
+    def test_block_sizes(self):
+        files = ("tests/sample_files/sample_ascii.cfg",
+                 "tests/sample_files/sample_ascii_missing.dat")
+        expected = _channel_values(Comtrade(ignore_warnings=True).load(*files))
+        # 10 values per line: 1 and 3 lines per block
+        for block_values in (1, 30):
+            with self.subTest(block_values=block_values), \
+                    mock.patch.object(comtrade, "_ASCII_BLOCK_VALUES", block_values):
+                obj = Comtrade(ignore_warnings=True).load(*files)
+                self.assertEqual(_channel_values(obj), expected)
+
+
+class TestDatRowsCount(unittest.TestCase):
+    """DAT files with more or fewer rows than the CFG total samples."""
+    use_numpy_arrays = False
+
+    def read(self, dat_format, rows):
+        obj = Comtrade(ignore_warnings=True,
+                       use_numpy_arrays=self.use_numpy_arrays)
+        if dat_format == "ASCII":
+            dat = "".join("{0},{1},{0},{2}\n".format(n, ts, status)
+                          for n, ts, status in rows)
+        else:
+            dat = b"".join(struct.pack("<IIhH", n, ts, n, status)
+                           for n, ts, status in rows)
+        obj.read(COMTRADE_SAMPLE_5_CFG.format(format=dat_format), dat)
+        return obj
+
+    def test_more_rows(self):
+        rows = [(n, (n - 1) * 1000, n % 2) for n in range(1, 9)]
+        for dat_format in ("ASCII", "BINARY"):
+            with self.subTest(format=dat_format):
+                obj = self.read(dat_format, rows)
+                self.assertEqual(list(obj.analog[0]), [1, 2, 3, 4, 5, 6])
+                self.assertEqual(list(obj.status[0]), [1, 0, 1, 0, 1, 0])
+
+    def test_fewer_rows(self):
+        # values of the samples missing in the DAT file are zero
+        rows = [(n, (n - 1) * 1000, n % 2) for n in range(1, 5)]
+        for dat_format in ("ASCII", "BINARY"):
+            with self.subTest(format=dat_format):
+                obj = self.read(dat_format, rows)
+                self.assertEqual(list(obj.analog[0]), [1, 2, 3, 4, 0, 0])
+                self.assertEqual(list(obj.status[0]), [1, 0, 1, 0, 0, 0])
+                self.assertEqual(len(obj.time), 6)
+
+
+@unittest.skipUnless(comtrade._HAS_NUMPY, "numpy is not installed")
+class TestDatRowsCountNumpy(TestDatRowsCount):
+    """DAT files with more or fewer rows, using numpy arrays."""
+    use_numpy_arrays = True
+
+
+@unittest.skipUnless(comtrade._HAS_NUMPY, "numpy is not installed")
+class TestNumpyArraysReading(unittest.TestCase):
+    """DAT files read into numpy arrays have the same values as arrays."""
+    def test_values(self):
+        for files in (("tests/sample_files/sample_ascii.cfg",
+                       "tests/sample_files/sample_ascii_missing.dat"),
+                      ("tests/sample_files/sample_bin.cfg",
+                       "tests/sample_files/sample_bin_missing.dat"),
+                      ("tests/sample_files/sample_float32.cff",)):
+            with self.subTest(files=files):
+                expected = Comtrade(ignore_warnings=True).load(*files)
+                obj = Comtrade(ignore_warnings=True,
+                               use_numpy_arrays=True).load(*files)
+                self.assertIsInstance(obj.analog[0], comtrade.numpy.ndarray)
+                self.assertIsInstance(obj.status[0], comtrade.numpy.ndarray)
+                self.assertEqual(_channel_values(obj), _channel_values(expected))
 
 
 if __name__ == "__main__":

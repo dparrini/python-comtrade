@@ -146,7 +146,9 @@ in `Comtrade` object constructor:
 obj = Comtrade(use_numpy_arrays=True)
 ```
 
-It may improve performance for computations after loading data.
+It may improve performance for computations after loading data. It also speeds up loading binary
+DAT files (`BINARY`, `BINARY32` and `FLOAT32` formats), which are converted with vectorized numpy
+operations.
 
 
 #### Replace missing data with `float('nan')`
