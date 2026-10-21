@@ -21,6 +21,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+__version__ = "0.2.0"
 
 import array
 import datetime as dt
@@ -938,7 +939,6 @@ class Comtrade:
                     ftype = groups[0]
                     if groups[1] is not None:
                         fformat = groups[1]
-                        fbytes_obj = groups[2]
                         if ftype == "DAT" and fformat != _TYPE_ASCII:
                             break
 
@@ -1183,7 +1183,7 @@ class _AsciiDatReader(_DatReader):
     def parse(self, contents):
         """Parse a ASCII file contents."""
         # Check if contents has been read as an io.BytesIO object, if so, decode into a string.
-        contents = contents.decode() if (type(contents) == bytes) else contents
+        contents = contents.decode() if (type(contents) is bytes) else contents
 
         analog_count = self._cfg.analog_count
         status_count = self._cfg.status_count

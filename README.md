@@ -21,9 +21,9 @@ Or just copy `comtrade.py` from this repository.
 
 ### Requirements
 
-- Python 3.6 or newer
-- (optional) numpy for speed improvement
-- (optional) pandas for data frame support
+- Python 3.11 or newer
+- (optional) numpy for speed improvement: `pip install "comtrade[numpy]"`
+- (optional) pandas for data frame support: `pip install "comtrade[pandas]"`
 
 
 ## How to Use
@@ -183,11 +183,27 @@ Feel free to report any bugs you find. You are welcome to fork and submit pull r
 
 ## Development
 
-To run tests, use Python's `unittest`. From a clone of the GitHub repository, run the command:
+From a clone of the GitHub repository, run the tests and the linter with [uv](https://docs.astral.sh/uv/):
 
 ```sh
-python3 -m unittest ./tests/tests.py
+uv run pytest
+uv run ruff check
 ```
+
+Or, with pip 25.1 or newer:
+
+```sh
+python -m pip install -e . --group dev
+python -m pytest
+```
+
+### Releasing
+
+1. Update `__version__` in `comtrade.py` and push the commit to `master`.
+2. Publish a GitHub release tagged with that same version, e.g. `gh release create 0.1.3 --generate-notes`.
+
+The `Release` workflow then runs CI and uploads the sdist and wheel to PyPI using
+[Trusted Publishing](https://docs.pypi.org/trusted-publishers/), so no API token is needed.
 
 ## License
 

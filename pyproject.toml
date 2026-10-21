@@ -1,0 +1,53 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "comtrade"
+dynamic = ["version"]
+description = "A module designed to read Common Format for Transient Data Exchange (COMTRADE) file format."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE.md"]
+authors = [{ name = "David Parrini", email = "d.parrini@gmail.com" }]
+requires-python = ">=3.11"
+keywords = ["comtrade", "oscillography", "power systems", "IEEE C37.111", "IEC 60255-24"]
+classifiers = [
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
+    "Topic :: Scientific/Engineering",
+]
+dependencies = []
+
+[project.optional-dependencies]
+numpy = ["numpy"]
+pandas = ["pandas"]
+
+[project.urls]
+Homepage = "https://github.com/dparrini/python-comtrade"
+Issues = "https://github.com/dparrini/python-comtrade/issues"
+Changelog = "https://github.com/dparrini/python-comtrade/releases"
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff"]
+
+[tool.hatch.version]
+path = "comtrade.py"
+
+[tool.hatch.build.targets.wheel]
+only-include = ["comtrade.py"]
+
+[tool.hatch.build.targets.sdist]
+include = ["comtrade.py", "tests/", "README.md", "LICENSE.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]

@@ -2,7 +2,6 @@ import datetime as dt
 import math
 import os
 import struct
-import time
 import unittest
 import comtrade
 from comtrade import Comtrade
@@ -355,7 +354,7 @@ class TestBinaryReading(unittest.TestCase):
         # Load file
         file_path = os.path.abspath("tests/{}".format(self.filename))
         self.comtrade = Comtrade(ignore_warnings=True)
-        self.comtrade.load(file_path + ".cfg".format(self.filename))
+        self.comtrade.load(file_path + ".cfg")
 
     def tearDown(self):
         # Remove temporary files.
@@ -378,7 +377,7 @@ class TestBinaryReading(unittest.TestCase):
 
     def test_max_analog_value(self):
         tolerance = 2
-        self.assertLessEqual(100 - max(self.comtrade.analog[0]), 2)
+        self.assertLessEqual(100 - max(self.comtrade.analog[0]), tolerance)
 
     def test_last_status_value(self):
         self.assertEqual(self.comtrade.status[0][-1], 1)
