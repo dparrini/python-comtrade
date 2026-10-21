@@ -594,6 +594,9 @@ class Comtrade:
         )
         self._analog_values = []
         self._status_values = []
+        # time values of each analog channel, with the channel time skew
+        # (computed when first accessed)
+        self._analog_time_values = None
 
         # Additional CFF data (or additional comtrade files)
         self._hdr = None
@@ -658,6 +661,15 @@ class Comtrade:
     def time(self) -> list:
         """Return the time values list."""
         return self._time_values
+
+    @property
+    def analog_time(self) -> list:
+        """Return the time values list of each analog channel, i.e., the
+        sample time plus the channel time skew."""
+        if self._analog_time_values is None:
+            self._analog_time_values = [self._get_skewed_time(channel.skew)
+                                        for channel in self._cfg.analog_channels]
+        return self._analog_time_values
 
     @property
     def analog(self) -> list:
@@ -794,6 +806,15 @@ class Comtrade:
         self._analog_values = dat.analog
         self._status_values = dat.status
         self._total_samples = dat.total_samples
+        self._analog_time_values = None
+
+    def _get_skewed_time(self, skew: float):
+        """Return the time values shifted by a channel time skew (in microseconds)."""
+        skew_seconds = skew * 1E-6
+        if _HAS_NUMPY and isinstance(self._time_values, numpy.ndarray):
+            return self._time_values + skew_seconds
+        return array.array(self._time_values.typecode,
+                           [t + skew_seconds for t in self._time_values])
 
     def to_dataframe(self, **kwargs) -> "pd.DataFrame":
         """Return a pandas DataFrame object with comtrade data."""
@@ -1111,6 +1132,17 @@ class _DatReader:
         steps = self._cfg.sample_rates[-1][1]  # last samp field
         self._total_samples = steps
 
+        # first sample number and its time for each sample rate segment.
+        # Each sample is 1/samp after the previous one, where samp is the
+        # sample rate of the segment the sample belongs to.
+        self._rate_segments = []
+        start_n, start_time = 1, 0.0
+        for samp, endsamp in self._cfg.sample_rates:
+            self._rate_segments.append((samp, endsamp, start_n, start_time))
+            if samp != 0.0:
+                start_time += (endsamp - start_n) / samp
+            start_n = endsamp
+
         # analog and status count
         analog_count = self._cfg.analog_count
         status_count = self._cfg.status_count
@@ -1134,24 +1166,24 @@ class _DatReader:
             self.status[i] = _preallocate_values("i", steps,
                                                  self._use_numpy_arrays)
 
-    def _get_samp(self, n) -> float:
-        """Get the sampling rate for a sample n (1-based index)."""
-        # TODO: make tests.
-        last_sample_rate = 1.0
-        for samp, endsamp in self._cfg.sample_rates:
+    def _get_rate_segment(self, n) -> tuple:
+        """Get the sampling rate, first sample number and its time for the
+        sample rate segment of a sample n (1-based index)."""
+        for samp, endsamp, start_n, start_time in self._rate_segments:
             if n <= endsamp:
-                return samp
-        return last_sample_rate
+                return samp, start_n, start_time
+        # samples beyond the last endsamp continue at the last sample rate
+        samp, _, start_n, start_time = self._rate_segments[-1]
+        return samp, start_n, start_time
 
     def _get_time(self, n: int, ts_value: float, time_base: float,
                   time_multiplier: float):
         # TODO: add option to enforce dat file timestamp, when available.
-        # TODO: make tests.
-        sample_rate = self._get_samp(n)
+        sample_rate, start_n, start_time = self._get_rate_segment(n)
         if not self._cfg.timestamp_critical or ts_value == _TIMESTAMP_MISSING:
             # if the timestamp is missing, use calculated.
             if sample_rate != 0.0:
-                return (n - 1) / sample_rate
+                return start_time + (n - start_n) / sample_rate
             else:
                 raise ComtradeError("Missing timestamp and no sample rate "
                                     "provided.")
@@ -1208,8 +1240,8 @@ class _AsciiDatReader(_DatReader):
             values = line.strip().split(self.ASCII_SEPARATOR)
 
             n = int(values[0])
-            # Read time
-            ts_val = float(values[1])
+            # Read time (the non-critical timestamp may be left blank)
+            ts_val = float(values[1]) if values[1].strip() else _TIMESTAMP_MISSING
             ts = self._get_time(n, ts_val, time_base, time_mult)
 
             avalues = [value * a[i] + b[i] if not math.isnan(value) else float('nan')
@@ -1265,7 +1297,7 @@ class _BinaryDatReader(_DatReader):
             return self.STRUCT_FORMAT_ANALOG_ONLY.format(acount=analog_channels)
         else:
             # Status channels only.
-            return self.STRUCT_FORMAT_STATUS_ONLY.format(acount=dcount)
+            return self.STRUCT_FORMAT_STATUS_ONLY.format(dcount=dcount)
 
     def parse(self, contents):
         """Parse DAT binary file contents."""

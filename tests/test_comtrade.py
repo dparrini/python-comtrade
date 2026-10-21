@@ -53,6 +53,70 @@ COMTRADE_SAMPLE_3_CFG = """STATION_NAME,EQUIPMENT,2013
 COMTRADE_SAMPLE_4_CFG_FILE = "tests/sample_files/sample_bin.cfg"
 COMTRADE_SAMPLE_4_DAT_FILE = "tests/sample_files/sample_bin.dat"
 
+# Two sample rates: 1000 Hz up to sample 4, then 500 Hz up to sample 6.
+COMTRADE_SAMPLE_5_CFG = """STATION_NAME,EQUIPMENT,1999
+2,1A,1D
+1, IA,,,A,1,0,0,-32768,32767,1,1,S
+1, Trip,,,0
+60
+2
+1000,4
+500,6
+01/01/2000,10:30:00.000000
+01/01/2000,10:30:00.000000
+{format}
+1
+"""
+
+COMTRADE_SAMPLE_5_DAT = "1,0,1,0\n2,1000,2,0\n3,2000,3,0\n4,3000,4,0\n5,5000,5,1\n6,7000,6,1\n"
+
+# Blank (non-critical) timestamps.
+COMTRADE_SAMPLE_6_CFG = """STATION_NAME,EQUIPMENT,1999
+2,1A,1D
+1, IA,,,A,1,0,0,-32768,32767,1,1,S
+1, Trip,,,0
+60
+1
+1000,3
+01/01/2000,10:30:00.000000
+01/01/2000,10:30:00.000000
+ASCII
+1
+"""
+
+COMTRADE_SAMPLE_6_DAT = "1,,1,0\n2,,2,0\n3,,3,1\n"
+
+# Status channels only.
+COMTRADE_SAMPLE_7_CFG = """STATION_NAME,EQUIPMENT,2013
+2,0A,2D
+1, Trip,,,0
+2, Close,,,0
+60
+1
+1000,3
+01/01/2000,10:30:00.000000
+01/01/2000,10:30:00.000000
+{format}
+1
+"""
+
+# Analog channels with 0, 250 and -100 microseconds time skew.
+COMTRADE_SAMPLE_8_CFG = """STATION_NAME,EQUIPMENT,1999
+3,3A,0D
+1, IA,,,A,1,0,0,-32768,32767,1,1,S
+2, IB,,,A,1,0,250,-32768,32767,1,1,S
+3, IC,,,A,1,0,-100,-32768,32767,1,1,S
+60
+1
+1000,3
+01/01/2000,10:30:00.000000
+01/01/2000,10:30:00.000000
+{format}
+1
+"""
+
+COMTRADE_SAMPLE_8_DAT = "1,0,1,2,3\n2,1000,4,5,6\n3,2000,7,8,9\n"
+
 
 class TestTimestamp(unittest.TestCase):
     """Test timestamp parsing."""
@@ -553,6 +617,111 @@ class TestDoublePrecisionHandling(unittest.TestCase):
         self.assertEqual(comtrade.time.typecode, "d")
         for chan in comtrade.analog:
             self.assertEqual(chan.typecode, "d")
+
+
+class TestMultipleSampleRates(unittest.TestCase):
+    """ASCII DAT file with two sample rates."""
+    def setUp(self):
+        self.comtrade = Comtrade(ignore_warnings=True)
+        self.comtrade.read(COMTRADE_SAMPLE_5_CFG.format(format="ASCII"),
+                           COMTRADE_SAMPLE_5_DAT)
+
+    def test_sample_rates(self):
+        self.assertEqual(self.comtrade.cfg.sample_rates, [[1000.0, 4], [500.0, 6]])
+
+    def test_time(self):
+        expected = [0.0, 0.001, 0.002, 0.003, 0.005, 0.007]
+        self.assertEqual(len(self.comtrade.time), len(expected))
+        for t, t_expected in zip(self.comtrade.time, expected):
+            self.assertAlmostEqual(t, t_expected, places=6)
+
+
+class TestMultipleSampleRatesBinary(TestMultipleSampleRates):
+    """Binary DAT file with two sample rates."""
+    def setUp(self):
+        dat = b"".join(struct.pack("<IIhH", n, ts, n, status)
+                       for n, ts, status in [(1, 0, 0), (2, 1000, 0), (3, 2000, 0),
+                                             (4, 3000, 0), (5, 5000, 1), (6, 7000, 1)])
+        self.comtrade = Comtrade(ignore_warnings=True)
+        self.comtrade.read(COMTRADE_SAMPLE_5_CFG.format(format="BINARY"), dat)
+
+
+class TestAsciiMissingTimestamp(unittest.TestCase):
+    """ASCII DAT file with blank timestamps."""
+    def test_time_from_sample_rate(self):
+        obj = Comtrade(ignore_warnings=True)
+        obj.read(COMTRADE_SAMPLE_6_CFG, COMTRADE_SAMPLE_6_DAT)
+        for t, t_expected in zip(obj.time, [0.0, 0.001, 0.002]):
+            self.assertAlmostEqual(t, t_expected, places=6)
+        self.assertEqual(list(obj.analog[0]), [1.0, 2.0, 3.0])
+        self.assertEqual(list(obj.status[0]), [0, 0, 1])
+
+    def test_critical_timestamp(self):
+        # Without a sample rate the timestamps cannot be computed.
+        obj = Comtrade(ignore_warnings=True)
+        cfg = COMTRADE_SAMPLE_3_CFG.format(samples=3, seconds=0, format="ASCII")
+        with self.assertRaises(comtrade.ComtradeError):
+            obj.read(cfg, COMTRADE_SAMPLE_6_DAT)
+
+
+class TestStatusOnlyBinaryReading(unittest.TestCase):
+    """Binary DAT files without analog channels."""
+    def test_status_values(self):
+        dat = b"".join(struct.pack("<IIH", n, (n - 1) * 1000, bits)
+                       for n, bits in [(1, 0b00), (2, 0b01), (3, 0b11)])
+        for dat_format in ("BINARY", "BINARY32", "FLOAT32"):
+            with self.subTest(format=dat_format):
+                obj = Comtrade(ignore_warnings=True)
+                obj.read(COMTRADE_SAMPLE_7_CFG.format(format=dat_format), dat)
+                self.assertEqual(obj.analog_count, 0)
+                self.assertEqual(list(obj.status[0]), [0, 1, 1])
+                self.assertEqual(list(obj.status[1]), [0, 0, 1])
+
+
+class TestAnalogChannelSkew(unittest.TestCase):
+    """ASCII DAT file with skewed analog channels."""
+    use_numpy_arrays = False
+
+    def setUp(self):
+        self.comtrade = Comtrade(ignore_warnings=True,
+                                 use_numpy_arrays=self.use_numpy_arrays)
+        self.comtrade.read(COMTRADE_SAMPLE_8_CFG.format(format="ASCII"),
+                           COMTRADE_SAMPLE_8_DAT)
+
+    def test_skew(self):
+        skews = [channel.skew for channel in self.comtrade.cfg.analog_channels]
+        self.assertEqual(skews, [0.0, 250.0, -100.0])
+
+    def test_sample_time(self):
+        for t, t_expected in zip(self.comtrade.time, [0.0, 0.001, 0.002]):
+            self.assertAlmostEqual(t, t_expected, places=6)
+
+    def test_analog_time(self):
+        expected = [[0.0, 0.001, 0.002],
+                    [0.00025, 0.00125, 0.00225],
+                    [-0.0001, 0.0009, 0.0019]]
+        self.assertEqual(len(self.comtrade.analog_time), self.comtrade.analog_count)
+        for channel_time, channel_expected in zip(self.comtrade.analog_time, expected):
+            self.assertEqual(len(channel_time), len(channel_expected))
+            for t, t_expected in zip(channel_time, channel_expected):
+                self.assertAlmostEqual(t, t_expected, places=6)
+
+
+class TestAnalogChannelSkewBinary(TestAnalogChannelSkew):
+    """Binary DAT file with skewed analog channels."""
+    def setUp(self):
+        dat = b"".join(struct.pack("<II3h", n, ts, *values)
+                       for n, ts, values in [(1, 0, (1, 2, 3)), (2, 1000, (4, 5, 6)),
+                                             (3, 2000, (7, 8, 9))])
+        self.comtrade = Comtrade(ignore_warnings=True,
+                                 use_numpy_arrays=self.use_numpy_arrays)
+        self.comtrade.read(COMTRADE_SAMPLE_8_CFG.format(format="BINARY"), dat)
+
+
+@unittest.skipUnless(comtrade._HAS_NUMPY, "numpy is not installed")
+class TestAnalogChannelSkewNumpy(TestAnalogChannelSkew):
+    """Skewed analog channels using numpy arrays."""
+    use_numpy_arrays = True
 
 
 if __name__ == "__main__":
