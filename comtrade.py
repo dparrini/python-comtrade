@@ -27,10 +27,11 @@ import array
 import datetime as dt
 import errno
 import io
+import itertools
 import math
+import operator
 import os
 import re
-import struct
 import sys
 from typing import Union
 import warnings
@@ -71,6 +72,9 @@ _CFF_HEADER_REXP = r"(?i)--- file type: ([a-z]+)(?:\s+([a-z0-9]+)(?:\s*\:\s*([0-
 # common separator character of data fields of CFG and ASCII DAT files
 _SEPARATOR = ","
 
+# maximum number of ASCII DAT file values converted at once
+_ASCII_BLOCK_VALUES = 1000000
+
 # timestamp regular expression
 _re_date = re.compile(r"([0-9]{1,2})/([0-9]{1,2})/([0-9]{2,4})")
 _re_time = re.compile(r"([0-9]{1,2}):([0-9]{2}):([0-9]{1,2})(.([0-9]{1,12}))?")
@@ -101,6 +105,27 @@ def _preallocate_values(array_type, size, use_numpy_arrays):
     if _HAS_NUMPY and use_numpy_arrays:
         return numpy.zeros(size, dtype=type_mapping_numpy[array_type])
     return array.array(array_type, [0]) * size
+
+
+def _copy_values(target, start: int, values):
+    """Copy values into a preallocated values array, from the start index."""
+    if isinstance(target, array.array):
+        values = array.array(target.typecode, values)
+    target[start:start + len(values)] = values
+
+
+def _unpack_column(data, row_size: int, offset: int, typecode: str) -> array.array:
+    """Unpack the little-endian field of typecode at the offset (in bytes) of
+    every row of row_size bytes in data."""
+    size = array.array(typecode).itemsize
+    column = bytearray(len(data) // row_size * size)
+    # gather each byte of the field from all rows at once
+    for k in range(size):
+        column[k::size] = data[offset + k::row_size]
+    values = array.array(typecode, column)
+    if sys.byteorder == "big":
+        values.byteswap()
+    return values
 
 
 def _prevent_null(str_value: str, value_type: type, default_value):
@@ -594,6 +619,9 @@ class Comtrade:
         )
         self._analog_values = []
         self._status_values = []
+        # time values of each analog channel, with the channel time skew
+        # (computed when first accessed)
+        self._analog_time_values = None
 
         # Additional CFF data (or additional comtrade files)
         self._hdr = None
@@ -658,6 +686,15 @@ class Comtrade:
     def time(self) -> list:
         """Return the time values list."""
         return self._time_values
+
+    @property
+    def analog_time(self) -> list:
+        """Return the time values list of each analog channel, i.e., the
+        sample time plus the channel time skew."""
+        if self._analog_time_values is None:
+            self._analog_time_values = [self._get_skewed_time(channel.skew)
+                                        for channel in self._cfg.analog_channels]
+        return self._analog_time_values
 
     @property
     def analog(self) -> list:
@@ -794,6 +831,15 @@ class Comtrade:
         self._analog_values = dat.analog
         self._status_values = dat.status
         self._total_samples = dat.total_samples
+        self._analog_time_values = None
+
+    def _get_skewed_time(self, skew: float):
+        """Return the time values shifted by a channel time skew (in microseconds)."""
+        skew_seconds = skew * 1E-6
+        if _HAS_NUMPY and isinstance(self._time_values, numpy.ndarray):
+            return self._time_values + skew_seconds
+        return array.array(self._time_values.typecode,
+                           [t + skew_seconds for t in self._time_values])
 
     def to_dataframe(self, **kwargs) -> "pd.DataFrame":
         """Return a pandas DataFrame object with comtrade data."""
@@ -1111,6 +1157,17 @@ class _DatReader:
         steps = self._cfg.sample_rates[-1][1]  # last samp field
         self._total_samples = steps
 
+        # first sample number and its time for each sample rate segment.
+        # Each sample is 1/samp after the previous one, where samp is the
+        # sample rate of the segment the sample belongs to.
+        self._rate_segments = []
+        start_n, start_time = 1, 0.0
+        for samp, endsamp in self._cfg.sample_rates:
+            self._rate_segments.append((samp, endsamp, start_n, start_time))
+            if samp != 0.0:
+                start_time += (endsamp - start_n) / samp
+            start_n = endsamp
+
         # analog and status count
         analog_count = self._cfg.analog_count
         status_count = self._cfg.status_count
@@ -1134,33 +1191,30 @@ class _DatReader:
             self.status[i] = _preallocate_values("i", steps,
                                                  self._use_numpy_arrays)
 
-    def _get_samp(self, n) -> float:
-        """Get the sampling rate for a sample n (1-based index)."""
-        # TODO: make tests.
-        last_sample_rate = 1.0
-        for samp, endsamp in self._cfg.sample_rates:
+    def _get_rate_segment(self, n) -> tuple:
+        """Get the sampling rate, first sample number and its time for the
+        sample rate segment of a sample n (1-based index)."""
+        for samp, endsamp, start_n, start_time in self._rate_segments:
             if n <= endsamp:
-                return samp
-        return last_sample_rate
+                return samp, start_n, start_time
+        # samples beyond the last endsamp continue at the last sample rate
+        samp, _, start_n, start_time = self._rate_segments[-1]
+        return samp, start_n, start_time
 
     def _get_time(self, n: int, ts_value: float, time_base: float,
                   time_multiplier: float):
         # TODO: add option to enforce dat file timestamp, when available.
-        # TODO: make tests.
-        sample_rate = self._get_samp(n)
+        sample_rate, start_n, start_time = self._get_rate_segment(n)
         if not self._cfg.timestamp_critical or ts_value == _TIMESTAMP_MISSING:
             # if the timestamp is missing, use calculated.
             if sample_rate != 0.0:
-                return (n - 1) / sample_rate
+                return start_time + (n - start_n) / sample_rate
             else:
                 raise ComtradeError("Missing timestamp and no sample rate "
                                     "provided.")
         else:
             # Use provided timestamp if it's not missing
             return ts_value * time_base * time_multiplier
-
-    def filter_missing(self, value) -> float:
-        return float(value) if value != self.DATA_MISSING else float('nan')
 
     def parse(self, contents):
         """Virtual method, parse DAT file contents."""
@@ -1189,6 +1243,8 @@ class _AsciiDatReader(_DatReader):
         status_count = self._cfg.status_count
         time_mult = self._cfg.timemult
         time_base = self._cfg.time_base
+        missing = self.DATA_MISSING
+        nan = float('nan')
 
         # auxiliary vectors (channels gains and offsets)
         a = [x.a for x in self._cfg.analog_channels]
@@ -1199,29 +1255,37 @@ class _AsciiDatReader(_DatReader):
             lines = contents.splitlines()
         else:
             lines = contents
+        lines = iter(lines)
 
-        line_number = 0
-        for line in lines:
-            line_number = line_number + 1
-            if line_number > self._total_samples:
+        # Lines are read in blocks and the values of each channel in a block
+        # are converted at once, which is much faster than one by one.
+        block_size = max(1, _ASCII_BLOCK_VALUES // (analog_count + status_count + 2))
+        irow = 0
+        while irow < self._total_samples:
+            rows = [line.strip().split(self.ASCII_SEPARATOR) for line in
+                    itertools.islice(lines, min(block_size, self._total_samples - irow))]
+            if not rows:
                 break
-            values = line.strip().split(self.ASCII_SEPARATOR)
 
-            n = int(values[0])
-            # Read time
-            ts_val = float(values[1])
-            ts = self._get_time(n, ts_val, time_base, time_mult)
+            # Read time (the non-critical timestamp may be left blank)
+            _copy_values(self.time, irow, [
+                self._get_time(int(values[0]),
+                               float(values[1]) if values[1].strip() else _TIMESTAMP_MISSING,
+                               time_base, time_mult)
+                for values in rows])
 
-            avalues = [value * a[i] + b[i] if not math.isnan(value) else float('nan')
-                       for i, value in enumerate(map(self.filter_missing, values[2:analog_count + 2]))]
-            svalues = [int(x) for x in values[len(values) - status_count:]]
-
-            # store
-            self.time[line_number - 1] = ts
             for i in range(analog_count):
-                self.analog[i][line_number - 1] = avalues[i]
+                ai, bi = a[i], b[i]
+                _copy_values(self.analog[i], irow,
+                             [ai * float(value) + bi if value != missing else nan
+                              for value in map(operator.itemgetter(i + 2), rows)])
+
+            # status values are the last ones of each line
             for i in range(status_count):
-                self.status[i][line_number - 1] = svalues[i]
+                _copy_values(self.status[i], irow,
+                             list(map(int, map(operator.itemgetter(i - status_count), rows))))
+
+            irow += len(rows)
 
 
 class _BinaryDatReader(_DatReader):
@@ -1235,6 +1299,10 @@ class _BinaryDatReader(_DatReader):
         self.TIME_BYTES = 4
         self.SAMPLE_NUMBER_BYTES = 4
 
+        # array typecodes of the analog and the 16 bits status values
+        self.ANALOG_TYPECODE = "h"
+        self.STATUS_TYPECODE = "H"
+
         if self._rev_year == REV_1991:
             self.DATA_MISSING = -1  # 0xFFFF
         else:
@@ -1242,30 +1310,24 @@ class _BinaryDatReader(_DatReader):
 
         self.read_mode = "rb"
 
-        if struct.calcsize("L") == 4:
-            self.STRUCT_FORMAT = "LL {acount:d}h {dcount:d}H"
-            self.STRUCT_FORMAT_ANALOG_ONLY = "LL {acount:d}h"
-            self.STRUCT_FORMAT_STATUS_ONLY = "LL {dcount:d}H"
-        else:
-            self.STRUCT_FORMAT = "II {acount:d}h {dcount:d}H"
-            self.STRUCT_FORMAT_ANALOG_ONLY = "II {acount:d}h"
-            self.STRUCT_FORMAT_STATUS_ONLY = "II {dcount:d}H"
+    def _get_analog_values(self, yint, a: float, b: float):
+        """Return the analog values a * yint + b of the raw values yint,
+        with NaN for missing raw values."""
+        if _HAS_NUMPY and self._use_numpy_arrays:
+            y = numpy.asarray(yint, dtype=numpy.float64)
+            is_missing = y == self.DATA_MISSING
+            y = a * y + b
+            y[is_missing] = numpy.nan
+            return y
+        missing = self.DATA_MISSING
+        nan = float('nan')
+        return [a * value + b if value != missing else nan for value in yint]
 
-    def get_reader_format(self, analog_channels, status_bytes):
-        # Number of status fields of 2 bytes based on the total number of 
-        # bytes.
-        dcount = math.floor(status_bytes / 2)
-
-        # Check the file configuration
-        if int(status_bytes) > 0 and int(analog_channels) > 0:
-            return self.STRUCT_FORMAT.format(acount=analog_channels,
-                                             dcount=dcount)
-        elif int(analog_channels) > 0:
-            # Analog channels only.
-            return self.STRUCT_FORMAT_ANALOG_ONLY.format(acount=analog_channels)
-        else:
-            # Status channels only.
-            return self.STRUCT_FORMAT_STATUS_ONLY.format(acount=dcount)
+    def _get_status_values(self, group, chnindex: int):
+        """Return the status values of the bit chnindex of a group of 16 bits."""
+        if _HAS_NUMPY and self._use_numpy_arrays:
+            return (numpy.asarray(group) >> chnindex) & 1
+        return [(word >> chnindex) & 1 for word in group]
 
     def parse(self, contents):
         """Parse DAT binary file contents."""
@@ -1281,47 +1343,48 @@ class _BinaryDatReader(_DatReader):
         dbytes = self.STATUS_BYTES * math.ceil(schannel / 16.0)
         groups_of_16bits = math.floor(dbytes / self.STATUS_BYTES)
 
-        # Struct format.
-        row_reader = struct.Struct(self.get_reader_format(achannels, dbytes))
-
-        # Row reading function.
         if isinstance(contents, io.TextIOBase) or \
                 isinstance(contents, io.BufferedIOBase):
             # Read all buffer contents
             contents = contents.read()
 
-        for irow, values in enumerate(row_reader.iter_unpack(contents)):
-            # Sample number
-            n = values[0]
-            # Time stamp
-            ts_val = values[1]
-            ts = self._get_time(n, ts_val, time_base, time_mult)
+        # Each row has the sample number, the time stamp, the analog values
+        # and the groups of 16 status bits. Only whole rows are read, up to
+        # the total samples.
+        row_size = self.SAMPLE_NUMBER_BYTES + self.TIME_BYTES + \
+            achannels * self.ANALOG_BYTES + dbytes
+        rows = min(len(contents) // row_size, self.total_samples)
+        contents = contents[:rows * row_size]
 
-            if irow >= self.total_samples:
-                break
-            self.time[irow] = ts
+        # Each field is unpacked from all rows at once, which is much faster
+        # than unpacking the rows one by one.
+        sample_numbers = _unpack_column(contents, row_size, 0, "I")
+        timestamps = _unpack_column(contents, row_size,
+                                    self.SAMPLE_NUMBER_BYTES, "I")
+        _copy_values(self.time, 0, [self._get_time(n, ts_val, time_base, time_mult)
+                                    for n, ts_val in zip(sample_numbers, timestamps)])
 
-            # Extract analog channel values.
-            for ichannel in range(achannels):
-                yint = self.filter_missing(values[ichannel + 2])
-                y = a[ichannel] * yint + b[ichannel] if not math.isnan(yint) else float('nan')
-                self.analog[ichannel][irow] = y
+        # Extract analog channel values.
+        offset = self.SAMPLE_NUMBER_BYTES + self.TIME_BYTES
+        for ichannel in range(achannels):
+            yint = _unpack_column(contents, row_size, offset,
+                                  self.ANALOG_TYPECODE)
+            _copy_values(self.analog[ichannel], 0,
+                         self._get_analog_values(yint, a[ichannel], b[ichannel]))
+            offset += self.ANALOG_BYTES
 
-            # Extract status channel values.
-            for igroup in range(groups_of_16bits):
-                group = values[achannels + 2 + igroup]
+        # Extract status channel values.
+        for igroup in range(groups_of_16bits):
+            group = _unpack_column(contents, row_size, offset,
+                                   self.STATUS_TYPECODE)
 
-                # for each group of 16 bits, extract the status channels
-                maxchn = min([(igroup + 1) * 16, schannel])
-                for ichannel in range(igroup * 16, maxchn):
-                    chnindex = ichannel - igroup * 16
-                    mask = int('0b01', 2) << chnindex
-                    extract = (group & mask) >> chnindex
-
-                    self.status[ichannel][irow] = extract
-
-            # Get the next row
-            irow += 1
+            # for each group of 16 bits, extract the status channels
+            maxchn = min((igroup + 1) * 16, schannel)
+            for ichannel in range(igroup * 16, maxchn):
+                chnindex = ichannel - igroup * 16
+                _copy_values(self.status[ichannel], 0,
+                             self._get_status_values(group, chnindex))
+            offset += self.STATUS_BYTES
 
 
 class _Binary32DatReader(_BinaryDatReader):
@@ -1331,13 +1394,7 @@ class _Binary32DatReader(_BinaryDatReader):
         # Call the initialization for the inherited class
         super().__init__(**kwargs)
         self.ANALOG_BYTES = 4
-
-        if struct.calcsize("L") == 4:
-            self.STRUCT_FORMAT = "LL {acount:d}l {dcount:d}H"
-            self.STRUCT_FORMAT_ANALOG_ONLY = "LL {acount:d}l"
-        else:
-            self.STRUCT_FORMAT = "II {acount:d}i {dcount:d}H"
-            self.STRUCT_FORMAT_ANALOG_ONLY = "II {acount:d}i"
+        self.ANALOG_TYPECODE = "i"
 
         # maximum negative value
         self.DATA_MISSING = -2147483648  # 0x80000000
@@ -1350,13 +1407,7 @@ class _Float32DatReader(_BinaryDatReader):
         # Call the initialization for the inherited class
         super().__init__(**kwargs)
         self.ANALOG_BYTES = 4
-
-        if struct.calcsize("L") == 4:
-            self.STRUCT_FORMAT = "LL {acount:d}f {dcount:d}H"
-            self.STRUCT_FORMAT_ANALOG_ONLY = "LL {acount:d}f"
-        else:
-            self.STRUCT_FORMAT = "II {acount:d}f {dcount:d}H"
-            self.STRUCT_FORMAT_ANALOG_ONLY = "II {acount:d}f"
+        self.ANALOG_TYPECODE = "f"
 
         # Maximum negative value
         self.DATA_MISSING = sys.float_info.min
