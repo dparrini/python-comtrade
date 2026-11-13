@@ -664,6 +664,29 @@ class TestAsciiMissingTimestamp(unittest.TestCase):
         with self.assertRaises(comtrade.ComtradeError):
             obj.read(cfg, COMTRADE_SAMPLE_6_DAT)
 
+    def test_binary_missing_marker_is_a_valid_timestamp(self):
+        # 0xFFFFFFFF marks a missing timestamp in binary files only: in an
+        # ASCII file it is an ordinary decimal timestamp (issue #56).
+        obj = Comtrade(ignore_warnings=True, use_double_precision=True)
+        cfg = COMTRADE_SAMPLE_3_CFG.format(samples=3, seconds=0, format="ASCII")
+        obj.read(cfg, "1,4294967294,1,0\n2,4294967295,2,0\n3,4294967296,3,1\n")
+        expected = [4.294967294, 4.294967295, 4.294967296]
+        self.assertEqual(len(obj.time), len(expected))
+        for t, t_expected in zip(obj.time, expected):
+            self.assertAlmostEqual(t, t_expected, places=9)
+
+
+class TestBinaryMissingTimestamp(unittest.TestCase):
+    """Binary DAT file with missing (0xFFFFFFFF) timestamps."""
+    def test_critical_timestamp(self):
+        # Without a sample rate the timestamps cannot be computed.
+        dat = b"".join(struct.pack("<IIhH", n, ts, n, 0)
+                       for n, ts in [(1, 0), (2, 0xFFFFFFFF), (3, 2000)])
+        obj = Comtrade(ignore_warnings=True)
+        cfg = COMTRADE_SAMPLE_3_CFG.format(samples=3, seconds=0, format="BINARY")
+        with self.assertRaises(comtrade.ComtradeError):
+            obj.read(cfg, dat)
+
 
 class TestStatusOnlyBinaryReading(unittest.TestCase):
     """Binary DAT files without analog channels."""

@@ -21,7 +21,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 import array
 import datetime as dt
@@ -1201,11 +1201,15 @@ class _DatReader:
         samp, _, start_n, start_time = self._rate_segments[-1]
         return samp, start_n, start_time
 
-    def _get_time(self, n: int, ts_value: float, time_base: float,
+    def _get_time(self, n: int, ts_value, time_base: float,
                   time_multiplier: float):
+        """Return the time of the sample n (1-based index). ts_value is the
+        DAT file timestamp, or None if it is missing. Each reader translates
+        its own format's missing marker to None, so that every numeric
+        value remains a valid timestamp."""
         # TODO: add option to enforce dat file timestamp, when available.
         sample_rate, start_n, start_time = self._get_rate_segment(n)
-        if not self._cfg.timestamp_critical or ts_value == _TIMESTAMP_MISSING:
+        if not self._cfg.timestamp_critical or ts_value is None:
             # if the timestamp is missing, use calculated.
             if sample_rate != 0.0:
                 return start_time + (n - start_n) / sample_rate
@@ -1267,10 +1271,12 @@ class _AsciiDatReader(_DatReader):
             if not rows:
                 break
 
-            # Read time (the non-critical timestamp may be left blank)
+            # Read time. A missing timestamp is a blank field in ASCII files:
+            # 0xFFFFFFFF is the missing marker of binary files only, and a
+            # valid decimal timestamp here.
             _copy_values(self.time, irow, [
                 self._get_time(int(values[0]),
-                               float(values[1]) if values[1].strip() else _TIMESTAMP_MISSING,
+                               float(values[1]) if values[1].strip() else None,
                                time_base, time_mult)
                 for values in rows])
 
@@ -1361,8 +1367,11 @@ class _BinaryDatReader(_DatReader):
         sample_numbers = _unpack_column(contents, row_size, 0, "I")
         timestamps = _unpack_column(contents, row_size,
                                     self.SAMPLE_NUMBER_BYTES, "I")
-        _copy_values(self.time, 0, [self._get_time(n, ts_val, time_base, time_mult)
-                                    for n, ts_val in zip(sample_numbers, timestamps)])
+        # 0xFFFFFFFF marks a missing timestamp in binary files
+        _copy_values(self.time, 0, [
+            self._get_time(n, ts_val if ts_val != _TIMESTAMP_MISSING else None,
+                           time_base, time_mult)
+            for n, ts_val in zip(sample_numbers, timestamps)])
 
         # Extract analog channel values.
         offset = self.SAMPLE_NUMBER_BYTES + self.TIME_BYTES
