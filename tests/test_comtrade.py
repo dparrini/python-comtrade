@@ -1654,6 +1654,17 @@ class TestSaving(unittest.TestCase):
                     saved = comtrade.load(self.path("saved.cfg"), ignore_warnings=True)
                     self.assert_same_data(original, saved, WRITE_FORMAT_TOLERANCE[ft])
 
+    def test_float32_missing_marker(self):
+        obj = Comtrade(ignore_warnings=True)
+        obj.read(COMTRADE_SAMPLE_1_CFG, COMTRADE_SAMPLE_1_DAT)
+        obj.analog[0][1] = float("nan")
+        obj.save(self.path("saved.cfg"), ft="FLOAT32", rev_year="2013")
+        with open(self.path("saved.dat"), "rb") as file:
+            rows = list(struct.iter_unpack("<IIfH", file.read()))
+        self.assertEqual(rows[1][2], struct.unpack("<f", b"\xff\xff\x7f\xff")[0])
+        saved = comtrade.load(self.path("saved.cfg"), ignore_warnings=True)
+        self.assertTrue(math.isnan(saved.analog[0][1]))
+
     def test_time_window(self):
         full = comtrade.load("tests/sample_files/sample_ascii.cfg",
                              ignore_warnings=True)

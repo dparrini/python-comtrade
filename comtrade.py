@@ -126,8 +126,10 @@ _INT_LIMITS = {_TYPE_ASCII: 99998, _TYPE_BINARY: 32767,
                _TYPE_BINARY32: 2147483647}
 # missing data markers
 _ASCII_MISSING = "99999"
+# most negative single precision value (-3.40282347E+38, 0xFF7FFFFF)
+_FLOAT32_MISSING = -3.4028234663852886e+38
 _BINARY_MISSING = {_TYPE_BINARY: -32768, _TYPE_BINARY32: -2147483648,
-                   _TYPE_FLOAT32: float("nan")}
+                   _TYPE_FLOAT32: _FLOAT32_MISSING}
 _BINARY_ANALOG_TYPECODE = {_TYPE_BINARY: "h", _TYPE_BINARY32: "i",
                            _TYPE_FLOAT32: "f"}
 # maximum timestamp value (0xFFFFFFFF marks missing timestamps)
@@ -487,7 +489,7 @@ def _detect_sample_rates(times: list) -> list:
 
 def _encode_analog(values: list, channel, ft: str, keep_scaling: bool) -> tuple:
     """Return the DAT file raw values of an analog channel and its a, b, min
-    and max CFG fields. Missing values are None (integer formats) or NaN.
+    and max CFG fields. Missing (NaN) values are None.
 
     The channel's a and b are kept if keep_scaling is set and the values fit
     the format range with them. Otherwise, they are computed to use the whole
@@ -496,8 +498,8 @@ def _encode_analog(values: list, channel, ft: str, keep_scaling: bool) -> tuple:
     if ft == _TYPE_FLOAT32:
         if not keep_scaling or a == 0:
             a, b = 1.0, 0.0
-        raw = [(v - b) / a for v in values]
-        finite = [r for r in raw if math.isfinite(r)]
+        raw = [None if math.isnan(v) else (v - b) / a for v in values]
+        finite = [r for r in raw if r is not None and math.isfinite(r)]
         cmin, cmax = (min(finite), max(finite)) if finite else (0.0, 0.0)
         return raw, a, b, cmin, cmax
 
@@ -2443,7 +2445,7 @@ class _Float32DatReader(_BinaryDatReader):
         # Most negative single precision value (-3.40282347E+38), the missing
         # data marker of the FLOAT32 format. It has to be the single precision
         # value, since the values are converted to double precision when read.
-        self.DATA_MISSING = -3.4028234663852886e+38
+        self.DATA_MISSING = _FLOAT32_MISSING
 
 
 def load(cfg_or_cff_file_path, dat_file_path=None, **kwargs) -> Comtrade:
