@@ -2251,6 +2251,9 @@ class _AsciiDatReader(_DatReader):
         first_line = next(lines, None)
         if first_line is not None:
             lines = itertools.chain([_strip_bom(first_line)], lines)
+        # Blank lines and the <sub> (0x1A) end of file marker, which the 1991
+        # and 1999 revisions place after the last data row, are not samples.
+        lines = (line for line in map(_eof_strip, lines) if line)
 
         # Lines are read in blocks and the values of each channel in a block
         # are converted at once, which is much faster than one by one.
@@ -2259,9 +2262,7 @@ class _AsciiDatReader(_DatReader):
         rows_read = 0
         past_window = False
         while rows_read < self._total_samples and not past_window:
-            # <sub> (0x1A) may appear appended to the end of text files on
-            # some platforms, as in the CFG and INF files
-            rows = [_eof_strip(line).split(self.ASCII_SEPARATOR) for line in
+            rows = [line.split(self.ASCII_SEPARATOR) for line in
                     itertools.islice(lines, min(block_size, self._total_samples - rows_read))]
             if not rows:
                 break
