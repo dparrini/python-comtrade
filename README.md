@@ -107,14 +107,18 @@ Feel free to pull requests implementing one of these unsupported features or fix
 |:------------------------------------------------------|:----:|:-----:|:----:|:----:|:---------------:|
 | CFG file format                                       | x    | x     | x    | x    | x               |
 | DAT file format                                       | x    | x     | x    | x    | x               |
-| HDR file format                                       | x    | x     | x    | x    | no              |
-| INF file format                                       |      | x     | x    | x    | no              |
+| HDR file format                                       | x    | x     | x    | x    | text (1)        |
+| INF file format                                       |      | x     | x    | x    | x (2)           |
 | CFF file format                                       |      |       |      | x    | x               |
 | ASCII data file format                                | x    | x     | x    | x    | x               |
 | Binary data file format                               | x    | x     | x    | x    | x               |
 | Binary32 data file format                             |      |       |      | x    | x               |
 | Float32 data file format                              |      |       |      | x    | x               |
 | Schema for phasor data                                |      |       |      | x    | no              |
+
+(1) HDR files are free text, available as a string in `Comtrade.hdr`.
+(2) INF files are available as a string in `Comtrade.inf` and can be parsed with
+`Comtrade.inf_sections()`. See [INF files](#inf-files).
 
 
 | Features                                              | 1991 | 1999 | 2001 | 2013 | Module Support  |
@@ -164,6 +168,63 @@ Comtrade dat format and revision year. These are listed in the table next.
 | 1999, 2013 |  binary  | `0x8000` or `-32768`          |
 |    2013    | binary32 | `0x80000000` or `-2147483648` |
 |    2013    | float32  | minimum negative float value  |
+
+
+#### Time code, local code and time quality (2013 revision)
+
+The 2013 revision CFG files may describe the time zone of the timestamps
+(`time_code`), the time zone of the recording location (`local_code`), the
+quality of the recording device clock (`tmq_code`) and leap second information
+(`leapsec`). These are available through the `Comtrade.cfg` object:
+
+```python
+import comtrade
+rec = comtrade.load("sample_files/sample_ascii.cfg")
+rec.cfg.time_code      # "-5h30", as written in the file ("" if absent)
+rec.cfg.time_offset    # datetime.timedelta(hours=-5, minutes=-30) (None if unknown)
+rec.cfg.local_code     # "-5h30"
+rec.cfg.local_offset   # datetime.timedelta(hours=-5, minutes=-30)
+rec.cfg.tmq_code       # 11 (0xB)
+rec.cfg.leap_second    # 3
+```
+
+`Comtrade.start_timestamp` and `Comtrade.trigger_timestamp` are naive `datetime` objects,
+as written in the file. When the time code is known, `Comtrade.start_timestamp_utc` and
+`Comtrade.trigger_timestamp_utc` return them as timezone-aware `datetime` objects in UTC,
+which is useful to align records from different devices. Otherwise, they return `None`.
+
+The time quality code (IEEE C37.118) is the maximum clock error of the recording device:
+
+| `tmq_code` | Clock error                          |
+|:----------:|:-------------------------------------|
+| 0          | clock locked to an UTC traceable source |
+| 1 to 11    | within 10^(n - 10) s: from 1 ns (1) to 10 s (11, `0xB`) |
+| 12 to 14   | reserved                             |
+| 15 (`0xF`) | clock failure, time not reliable     |
+
+The `leap_second` values are: 0 (no leap second adjustment), 1 (leap second added),
+2 (leap second subtracted), and 3 (the clock source cannot provide leap second information).
+
+
+#### INF files
+
+INF files use an INI-like format with public sections defined by the standard (such as
+`[Public Record_Information]` and `[Public Analog_Channel_#1]`) and vendor-specific private
+sections. `Comtrade.inf_sections()` parses them into a
+[`configparser.ConfigParser`](https://docs.python.org/3/library/configparser.html) object,
+keeping the case of section and key names (it returns `None` if there's no INF data):
+
+```python
+import comtrade
+rec = comtrade.load("my_record.cfg")  # also reads my_record.inf, if it exists
+inf = rec.inf_sections()
+if inf is not None:
+    for section in inf.sections():
+        print(section, dict(inf[section]))
+    print(inf["Public Record_Information"].get("Source"))
+```
+
+Values are strings. Duplicate sections and keys are allowed (the last value prevails).
 
 
 #### File encodings

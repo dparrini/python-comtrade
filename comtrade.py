@@ -24,6 +24,7 @@
 __version__ = "0.2.1"
 
 import array
+import configparser
 import datetime as dt
 import errno
 import io
@@ -86,6 +87,13 @@ _WARNING_DATETIME_NANO = "Unsupported datetime objects with nanoseconds \
 resolution. Using truncated values."
 # Date time with year 0, month 0 and/or day 0.
 _WARNING_MIN_DATE = "Missing date values. Using minimum values: {}."
+# Invalid 2013 revision time information fields
+_WARNING_INVALID_TIME_CODE = "Invalid time code \"{}\". Ignoring it."
+_WARNING_INVALID_TMQ_CODE = "Invalid time quality code \"{}\". Ignoring it."
+_WARNING_INVALID_LEAP_SECOND = "Invalid leap second indicator \"{}\". Ignoring it."
+
+# IEEE C37.232 time code, such as "-5h30", "+10", or "0"
+_re_time_code = re.compile(r"(?i)^([+-]?)([0-9]{1,2})(?:h([0-9]{1,2}))?$")
 
 
 class ComtradeError(Exception):
@@ -235,6 +243,63 @@ def _read_timestamp(timestamp_line: str, rev_year: str, ignore_warnings: bool = 
     return timestamp, nano_sec
 
 
+def _parse_time_code(time_code: str, ignore_warnings: bool = False) -> Union[dt.timedelta, None]:
+    """Convert an IEEE C37.232 time code (such as "-5h30", "+10" or "0") to the
+    time difference to UTC. Returns None for empty or "x" (not applicable) codes,
+    and for invalid ones (warning the user)."""
+    time_code = time_code.strip()
+    if time_code == "" or time_code.lower() == "x":
+        return None
+    m = _re_time_code.match(time_code)
+    if m is not None:
+        hours = int(m.group(2))
+        minutes = int(m.group(3)) if m.group(3) is not None else 0
+        if hours < 24 and minutes < 60:
+            offset = dt.timedelta(hours=hours, minutes=minutes)
+            return -offset if m.group(1) == "-" else offset
+    if not ignore_warnings:
+        warnings.warn(Warning(_WARNING_INVALID_TIME_CODE.format(time_code)))
+    return None
+
+
+def _parse_tmq_code(tmq_code: str, ignore_warnings: bool = False) -> Union[int, None]:
+    """Convert the time quality code (an hexadecimal digit, IEEE C37.118) to
+    int. Returns None for empty or invalid codes (warning the user)."""
+    tmq_code = tmq_code.strip()
+    if tmq_code == "":
+        return None
+    if len(tmq_code) == 1 and tmq_code in "0123456789abcdefABCDEF":
+        return int(tmq_code, 16)
+    if not ignore_warnings:
+        warnings.warn(Warning(_WARNING_INVALID_TMQ_CODE.format(tmq_code)))
+    return None
+
+
+def _parse_leap_second(leap_second: str, ignore_warnings: bool = False) -> Union[int, None]:
+    """Convert the leap second indicator (0 to 3) to int. Returns None for
+    empty or invalid values (warning the user)."""
+    leap_second = leap_second.strip()
+    if leap_second == "":
+        return None
+    if leap_second in ("0", "1", "2", "3"):
+        return int(leap_second)
+    if not ignore_warnings:
+        warnings.warn(Warning(_WARNING_INVALID_LEAP_SECOND.format(leap_second)))
+    return None
+
+
+def _to_utc(timestamp: dt.datetime, offset: Union[dt.timedelta, None]) -> Union[dt.datetime, None]:
+    """Convert a naive timestamp, in the time zone offset from UTC, to a timezone
+    aware datetime in UTC. Returns None when the offset is unknown."""
+    if offset is None:
+        return None
+    try:
+        return timestamp.replace(tzinfo=dt.timezone(offset)).astimezone(dt.timezone.utc)
+    except OverflowError:
+        # placeholder timestamps (missing dates) near datetime.min
+        return None
+
+
 def _eof_strip(line: str) -> str:
     """Strip line of whitespace and <sub> (0x1A) control character that may appear
      appended to the end of text files on some platforms."""
@@ -282,13 +347,17 @@ class Cfg:
         self._trigger_timestamp = dt.datetime(1900, 1, 1)
         self._ft = _TYPE_ASCII
         self._time_multiplier = 1.0
-        # 2013 standard revision information
-        # time_code,local_code = 0,0 means local time is UTC
-        self._time_code = 0
-        self._local_code = 0
+        # 2013 standard revision information (empty strings or None when
+        # not available)
+        # time_code: time difference to UTC of the file timestamps
+        # local_code: time difference to UTC of the recording location
+        self._time_code = ""
+        self._local_code = ""
+        self._time_offset = None
+        self._local_offset = None
         # tmq_code,leapsec
-        self._tmq_code = 0
-        self._leap_second = 0
+        self._tmq_code = None
+        self._leap_second = None
 
         self._ignore_warnings = kwargs.get("ignore_warnings", False)
 
@@ -386,6 +455,56 @@ class Cfg:
         """
         return self._sample_rates
 
+    @property
+    def time_code(self) -> str:
+        """Return the time code (IEEE C37.232) of the file timestamps, such as
+        "-5h30", as written in the CFG file (2013 revision). Empty if absent."""
+        return self._time_code
+
+    @property
+    def local_code(self) -> str:
+        """Return the time code (IEEE C37.232) of the recording location's
+        local time, such as "-5h30", as written in the CFG file (2013 revision).
+        Empty if absent."""
+        return self._local_code
+
+    @property
+    def time_offset(self) -> Union[dt.timedelta, None]:
+        """Return the time difference to UTC of the file timestamps (from
+        time_code), or None if unknown."""
+        return self._time_offset
+
+    @property
+    def local_offset(self) -> Union[dt.timedelta, None]:
+        """Return the time difference to UTC of the recording location's local
+        time (from local_code), or None if unknown."""
+        return self._local_offset
+
+    @property
+    def tmq_code(self) -> Union[int, None]:
+        """Return the time quality code (IEEE C37.118) of the recording device
+        clock, from 0 (locked) to 15 (clock failure), or None if absent."""
+        return self._tmq_code
+
+    @property
+    def leap_second(self) -> Union[int, None]:
+        """Return the leap second indicator: 0 (no leap second), 1 (added),
+        2 (subtracted), 3 (clock source unable to provide leap second
+        information), or None if absent."""
+        return self._leap_second
+
+    @property
+    def start_timestamp_utc(self) -> Union[dt.datetime, None]:
+        """Return the recording start time stamp as a timezone aware datetime
+        in UTC, or None if the time code is unknown."""
+        return _to_utc(self._start_timestamp, self._time_offset)
+
+    @property
+    def trigger_timestamp_utc(self) -> Union[dt.datetime, None]:
+        """Return the trigger time stamp as a timezone aware datetime in UTC,
+        or None if the time code is unknown."""
+        return _to_utc(self._trigger_timestamp, self._time_offset)
+
     # Deprecated properties - Changed "Digital" for "Status"
     @property
     def digital_channels(self) -> list:
@@ -431,6 +550,12 @@ class Cfg:
         self._sample_rates = []
         self._analog_channels = []
         self._status_channels = []
+        self._time_code = ""
+        self._local_code = ""
+        self._time_offset = None
+        self._local_offset = None
+        self._tmq_code = None
+        self._leap_second = None
 
         # First line
         line = cfg.readline()
@@ -560,12 +685,21 @@ class Cfg:
             line = _eof_strip(cfg.readline())
 
             if line:
-                self._time_code, self._local_code = _read_sep_values(line)
+                self._time_code, self._local_code = _read_sep_values(line, 2)
+                self._time_offset = _parse_time_code(self._time_code,
+                                                     self._ignore_warnings)
+                self._local_offset = _parse_time_code(self._local_code,
+                                                      self._ignore_warnings)
                 line_count = line_count + 1
 
                 line = _eof_strip(cfg.readline())
-                # time_code and local_code
-                self._tmq_code, self._leap_second = _read_sep_values(line)
+                # tmq_code and leapsec
+                if line:
+                    tmq_code, leap_second = _read_sep_values(line, 2)
+                    self._tmq_code = _parse_tmq_code(tmq_code,
+                                                     self._ignore_warnings)
+                    self._leap_second = _parse_leap_second(leap_second,
+                                                           self._ignore_warnings)
 
     def _get_time_base(self, using_nanoseconds: bool):
         """
@@ -662,6 +796,28 @@ class Comtrade:
         """Return the INF file contents."""
         return self._inf
 
+    def inf_sections(self) -> Union[configparser.ConfigParser, None]:
+        """Parse the INF file contents (1999 revision and later) and return
+        them as a configparser.ConfigParser object, or None if there is no
+        INF data.
+
+        Section and key names keep their original case, such as
+        "Public Record_Information". Values are strings. Duplicate sections
+        and keys are allowed, the last value prevails. Raises
+        configparser.Error if the contents are not in the INF (INI) format.
+        """
+        if not self._inf:
+            return None
+        parser = configparser.ConfigParser(
+            delimiters=("=",),
+            comment_prefixes=(";",),
+            strict=False,
+            interpolation=None,
+        )
+        parser.optionxform = str
+        parser.read_string(self._inf)
+        return parser
+
     @property
     def analog_channel_ids(self) -> list:
         """Returns the analog channels name list."""
@@ -725,6 +881,18 @@ class Comtrade:
     def trigger_timestamp(self):
         """Return the trigger time stamp as a datetime object."""
         return self._cfg.trigger_timestamp
+
+    @property
+    def start_timestamp_utc(self):
+        """Return the recording start time stamp as a timezone aware datetime
+        in UTC, or None if the time code is unknown (2013 revision)."""
+        return self._cfg.start_timestamp_utc
+
+    @property
+    def trigger_timestamp_utc(self):
+        """Return the trigger time stamp as a timezone aware datetime in UTC,
+        or None if the time code is unknown (2013 revision)."""
+        return self._cfg.trigger_timestamp_utc
 
     @property
     def channels_count(self) -> int:
