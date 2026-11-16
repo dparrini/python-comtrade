@@ -2185,6 +2185,22 @@ class _DatReader:
             # Use provided timestamp if it's not missing
             return ts_value * time_base * time_multiplier
 
+    def _fill_missing_times(self, start: int, time_base: float,
+                            time_multiplier: float) -> None:
+        """Fill the time values of the samples missing from the end of a
+        truncated DAT file with their times computed from the sample rate.
+        Samples without a fixed sample rate keep their zero time values."""
+        total = self._total_samples
+        if start >= total:
+            return
+        rates = [segment[0] for segment in self._rate_segments
+                 if segment[1] > start]
+        if not rates or 0.0 in rates:
+            return
+        _copy_values(self.time, start,
+                     [self._get_time(n + 1, None, time_base, time_multiplier)
+                      for n in range(start, total)])
+
     def parse(self, contents):
         """Virtual method, parse DAT file contents."""
         pass
@@ -2283,6 +2299,9 @@ class _AsciiDatReader(_DatReader):
             self.time = _truncate_values(self.time, irow)
             self.analog = [_truncate_values(values, irow) for values in self.analog]
             self.status = [_truncate_values(values, irow) for values in self.status]
+        else:
+            # samples missing from the end of a truncated DAT file
+            self._fill_missing_times(irow, time_base, time_mult)
 
 
 class _BinaryDatReader(_DatReader):
@@ -2403,6 +2422,9 @@ class _BinaryDatReader(_DatReader):
             self._use_numpy_arrays,
         )
         _copy_values(self.time, 0, times)
+        if not self._has_time_window:
+            # samples missing from the end of a truncated DAT file
+            self._fill_missing_times(len(times), time_base, time_mult)
 
         if self._lazy:
             self.analog = _LazyChannels(achannels, self._decode_analog)

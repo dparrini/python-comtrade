@@ -1245,6 +1245,22 @@ class TestDatRowsCount(unittest.TestCase):
                 self.assertEqual(list(obj.analog[0]), [1, 2, 3, 4, 0, 0])
                 self.assertEqual(list(obj.status[0]), [1, 0, 1, 0, 0, 0])
                 self.assertEqual(len(obj.time), 6)
+                # the missing samples keep their times, from the sample rate
+                self.assertEqual([round(t, 6) for t in obj.time],
+                                 [0.0, 0.001, 0.002, 0.003, 0.005, 0.007])
+
+    def test_fewer_rows_can_be_saved(self):
+        rows = [(n, (n - 1) * 1000, n % 2) for n in range(1, 5)]
+        for dat_format in ("ASCII", "BINARY"):
+            with self.subTest(format=dat_format), \
+                    tempfile.TemporaryDirectory() as tmp_dir:
+                obj = self.read(dat_format, rows)
+                path = os.path.join(tmp_dir, "saved.cfg")
+                obj.save(path)
+                saved = comtrade.load(path, ignore_warnings=True)
+                self.assertEqual([round(t, 6) for t in saved.time],
+                                 [0.0, 0.001, 0.002, 0.003, 0.005, 0.007])
+                self.assertEqual(list(saved.analog[0]), [1, 2, 3, 4, 0, 0])
 
 
 @unittest.skipUnless(comtrade._HAS_NUMPY, "numpy is not installed")
