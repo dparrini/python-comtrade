@@ -1,3 +1,4 @@
+import array
 import datetime as dt
 import math
 import os
@@ -1548,6 +1549,314 @@ class TestLazyLoading(unittest.TestCase):
         with Comtrade(ignore_warnings=True).load(self.cfg_path, lazy=True) as obj:
             self.assertEqual([list(v) for v in obj.analog_primary],
                              [list(v) for v in self.full.analog_primary])
+
+
+WRITE_FORMATS = ("ASCII", "BINARY", "BINARY32", "FLOAT32")
+# maximum relative error (to the channel's largest value) of each format
+WRITE_FORMAT_TOLERANCE = {"ASCII": 1E-5, "BINARY": 2E-5, "BINARY32": 1E-6,
+                          "FLOAT32": 1E-6}
+
+
+class TestSaving(unittest.TestCase):
+    """Saving loaded files and reading them back."""
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp_dir)
+
+    def path(self, name: str) -> str:
+        return os.path.join(self.tmp_dir, name)
+
+    def assert_same_data(self, expected, actual, tolerance: float):
+        self.assertEqual(actual.analog_channel_ids, expected.analog_channel_ids)
+        self.assertEqual(actual.status_channel_ids, expected.status_channel_ids)
+        self.assertEqual(actual.station_name, expected.station_name)
+        self.assertEqual(actual.frequency, expected.frequency)
+        self.assertEqual(actual.start_timestamp_ns, expected.start_timestamp_ns)
+        self.assertEqual(actual.trigger_timestamp_ns, expected.trigger_timestamp_ns)
+        self.assertEqual(actual.total_samples, expected.total_samples)
+        for t_expected, t_actual in zip(expected.time, actual.time):
+            self.assertAlmostEqual(t_actual, t_expected, places=6)
+        for values_expected, values_actual in zip(expected.analog, actual.analog):
+            scale = max(abs(v) for v in values_expected if not math.isnan(v)) or 1
+            for v_expected, v_actual in zip(values_expected, values_actual):
+                if math.isnan(v_expected):
+                    self.assertTrue(math.isnan(v_actual))
+                else:
+                    self.assertLessEqual(abs(v_actual - v_expected) / scale, tolerance)
+        self.assertEqual([list(v) for v in actual.status],
+                         [list(v) for v in expected.status])
+
+    def test_formats_round_trip(self):
+        for source in ("tests/sample_files/sample_ascii.cfg",
+                       "tests/sample_files/sample_bin.cfg",
+                       "tests/sample_files/sample_float32.cff"):
+            original = comtrade.load(source, ignore_warnings=True)
+            for ft in WRITE_FORMATS:
+                for ext in ("cfg", "cff"):
+                    with self.subTest(source=source, ft=ft, ext=ext):
+                        path = self.path("saved." + ext)
+                        original.save(path, ft=ft, rev_year="2013")
+                        saved = comtrade.load(path, ignore_warnings=True)
+                        self.assertEqual(saved.ft, ft)
+                        self.assertEqual(saved.cfg.sample_rates,
+                                         original.cfg.sample_rates)
+                        self.assert_same_data(original, saved,
+                                              WRITE_FORMAT_TOLERANCE[ft])
+
+    def test_same_format_keeps_raw_values(self):
+        original = comtrade.load(COMTRADE_SAMPLE_4_CFG_FILE, ignore_warnings=True)
+        original.save(self.path("saved.cfg"))
+        saved = comtrade.load(self.path("saved.cfg"), ignore_warnings=True)
+        self.assertEqual(saved.rev_year, "1999")
+        self.assertEqual([c.a for c in saved.cfg.analog_channels],
+                         [c.a for c in original.cfg.analog_channels])
+        self.assertEqual(_channel_values(saved), _channel_values(original))
+        with open(COMTRADE_SAMPLE_4_DAT_FILE, "rb") as file:
+            original_rows = file.read()
+        with open(self.path("saved.dat"), "rb") as file:
+            saved_rows = file.read()
+        # same rows, except the timestamps (zero in the original file)
+        row_size = 4 + 4 + 4 * 2 + 2
+        self.assertEqual(len(saved_rows), len(original_rows))
+        for k in range(0, len(saved_rows), row_size):
+            self.assertEqual(saved_rows[k + 8:k + row_size],
+                             original_rows[k + 8:k + row_size])
+
+    def test_cfg_contents(self):
+        obj = Comtrade(ignore_warnings=True)
+        obj.read(COMTRADE_SAMPLE_1_CFG, COMTRADE_SAMPLE_1_DAT)
+        obj.save(self.path("saved.cfg"))
+        with open(self.path("saved.cfg"), "rb") as file:
+            lines = file.read().decode().split("\r\n")
+        self.assertEqual(lines[0], "STATION_NAME,EQUIPMENT,2001")
+        self.assertEqual(lines[1], "2,1A,1D")
+        self.assertEqual(lines[2], "1,IA,,,A,2.762,0,0,-32768,32767,1,1,S")
+        self.assertEqual(lines[3], "1,Diff Trip A,,,0")
+        # non-uniformly sampled: no fixed sample rate
+        self.assertEqual(lines[4:8], ["60", "0", "0,2",
+                                      "01/01/2000,10:30:00.228000"])
+        self.assertEqual(lines[8:12], ["01/01/2000,10:30:00.722000",
+                                       "ASCII", "1", ""])
+        with open(self.path("saved.dat")) as file:
+            self.assertEqual(file.read(), "1,0,0,0\n2,347,-1,1\n")
+
+    def test_missing_values(self):
+        for source in ("tests/sample_files/sample_ascii.cfg",
+                       "tests/sample_files/sample_bin.cfg"):
+            dat = source[:-4] + "_missing.dat"
+            original = comtrade.load(source, dat, ignore_warnings=True)
+            self.assertTrue(any(math.isnan(v) for v in original.analog[0]))
+            for ft in WRITE_FORMATS:
+                with self.subTest(source=source, ft=ft):
+                    original.save(self.path("saved.cfg"), ft=ft, rev_year="2013")
+                    saved = comtrade.load(self.path("saved.cfg"), ignore_warnings=True)
+                    self.assert_same_data(original, saved, WRITE_FORMAT_TOLERANCE[ft])
+
+    def test_float32_missing_marker(self):
+        obj = Comtrade(ignore_warnings=True)
+        obj.read(COMTRADE_SAMPLE_1_CFG, COMTRADE_SAMPLE_1_DAT)
+        obj.analog[0][1] = float("nan")
+        obj.save(self.path("saved.cfg"), ft="FLOAT32", rev_year="2013")
+        with open(self.path("saved.dat"), "rb") as file:
+            rows = list(struct.iter_unpack("<IIfH", file.read()))
+        self.assertEqual(rows[1][2], struct.unpack("<f", b"\xff\xff\x7f\xff")[0])
+        saved = comtrade.load(self.path("saved.cfg"), ignore_warnings=True)
+        self.assertTrue(math.isnan(saved.analog[0][1]))
+
+    def test_time_window(self):
+        full = comtrade.load("tests/sample_files/sample_ascii.cfg",
+                             ignore_warnings=True)
+        start_time = full.time[10]
+        obj = comtrade.load("tests/sample_files/sample_ascii.cfg",
+                            ignore_warnings=True, start_time=start_time,
+                            end_time=full.time[19])
+        obj.save(self.path("window.cfg"))
+        saved = comtrade.load(self.path("window.cfg"), ignore_warnings=True)
+        self.assertEqual(saved.total_samples, 10)
+        self.assertEqual(saved.cfg.sample_rates, [[1200.0, 10]])
+        self.assertEqual(saved.start_timestamp_ns - full.start_timestamp_ns,
+                         round(start_time * 1E6) * 1000)
+        self.assertEqual(saved.trigger_timestamp_ns, full.trigger_timestamp_ns)
+        self.assertEqual(_channel_values(saved)[1:],
+                         [list(v)[10:20] for v in full.analog + full.status])
+
+    def test_multiple_sample_rates(self):
+        obj = Comtrade(ignore_warnings=True)
+        obj.read(COMTRADE_SAMPLE_5_CFG.format(format="ASCII"),
+                 COMTRADE_SAMPLE_5_DAT)
+        obj.save(self.path("saved.cfg"), ft="BINARY")
+        saved = comtrade.load(self.path("saved.cfg"), ignore_warnings=True)
+        self.assertEqual(saved.cfg.sample_rates, obj.cfg.sample_rates)
+        self.assertEqual(list(saved.time), list(obj.time))
+
+    def test_nanoseconds_and_time_codes(self):
+        cfg_text = COMTRADE_SAMPLE_3_CFG.format(samples=2, seconds=0.000001500,
+                                                format="ASCII")
+        cfg_text = cfg_text + "-3h30,+2\nA,1\n"
+        obj = Comtrade(ignore_warnings=True)
+        obj.read(cfg_text, "1,0,1,0\n2,1,2,1\n")
+        obj.save(self.path("saved.cfg"), ft="BINARY32")
+        saved = comtrade.load(self.path("saved.cfg"), ignore_warnings=True)
+        self.assertEqual(saved.time_base, Comtrade(ignore_warnings=True).cfg.TIME_BASE_NANO_SEC)
+        self.assertEqual(saved.trigger_timestamp_ns, obj.trigger_timestamp_ns)
+        self.assertEqual((saved.cfg.time_code, saved.cfg.local_code), ("-3h30", "+2"))
+        self.assertEqual((saved.cfg.tmq_code, saved.cfg.leap_second), (10, 1))
+
+    def test_hdr_and_inf(self):
+        obj = comtrade.load("tests/sample_files/sample_ascii.cff", ignore_warnings=True)
+        obj._inf = "[Public Record_Information]\nSource=Test"
+        obj._hdr = "Header text"
+        obj.save(self.path("saved.CFG"))
+        self.assertTrue(os.path.isfile(self.path("saved.DAT")))
+        saved = comtrade.load(self.path("saved.CFG"), ignore_warnings=True)
+        self.assertEqual(saved.hdr, "Header text")
+        self.assertEqual(saved.inf_sections()["Public Record_Information"]["Source"], "Test")
+        obj.save(self.path("saved.cff"), ft="FLOAT32")
+        saved = comtrade.load(self.path("saved.cff"), ignore_warnings=True)
+        self.assertEqual(saved.hdr, "Header text")
+        self.assertEqual(saved.inf_sections()["Public Record_Information"]["Source"], "Test")
+
+    def test_lazy_loaded(self):
+        with comtrade.load(COMTRADE_SAMPLE_4_CFG_FILE, ignore_warnings=True,
+                           lazy=True) as obj:
+            obj.save(self.path("saved.cfg"), ft="FLOAT32", rev_year="2013")
+            values = _channel_values(obj)
+        saved = comtrade.load(self.path("saved.cfg"), ignore_warnings=True)
+        self.assertEqual(_channel_values(saved), values)
+
+    def test_large_timestamps_use_time_multiplier(self):
+        obj = Comtrade(ignore_warnings=True)
+        obj.read(COMTRADE_SAMPLE_1_CFG, COMTRADE_SAMPLE_1_DAT)
+        obj._time_values = array.array("d", [0.0, 5000.0])
+        obj.save(self.path("saved.cfg"), ft="BINARY")
+        saved = comtrade.load(self.path("saved.cfg"), ignore_warnings=True)
+        self.assertEqual(saved.cfg.timemult, 2.0)
+        self.assertEqual(list(saved.time), [0.0, 5000.0])
+
+    def test_invalid_options(self):
+        obj = comtrade.load("tests/sample_files/sample_ascii.cfg", ignore_warnings=True)
+        with self.assertRaises(comtrade.ComtradeError):
+            obj.save(self.path("saved.cfg"), rev_year="1991")
+        with self.assertRaises(comtrade.ComtradeError):
+            obj.save(self.path("saved.cfg"), ft="FLOAT32", rev_year="1999")
+        with self.assertRaises(comtrade.ComtradeError):
+            obj.save(self.path("saved.cff"), rev_year="1999")
+        with self.assertRaises(comtrade.ComtradeError):
+            obj.save(self.path("saved.cfg"), ft="FLOAT64")
+        with self.assertRaises(comtrade.ComtradeError):
+            obj.save(self.path("saved.txt"))
+        obj.cfg.analog_channels[0].name = "I,A"
+        with self.assertRaises(comtrade.ComtradeError):
+            obj.save(self.path("saved.cfg"))
+
+
+@unittest.skipUnless(comtrade._HAS_PANDAS, "pandas is not installed")
+class TestFromDataFrame(unittest.TestCase):
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.cfg_path = os.path.join(self.tmp_dir, "df.cfg")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp_dir)
+
+    def test_seconds_index(self):
+        pd = comtrade.pd
+        df = pd.DataFrame({"IA": [0.0, 120.5, float("nan"), -310.25],
+                           "VA": [13800.0, 0.0, -13800.0, 0.0],
+                           "TRIP": [False, False, True, True]},
+                          index=[0.0, 0.00025, 0.0005, 0.00075])
+        obj = comtrade.from_dataframe(
+            df, station_name="SUB", rec_dev_id="REL1", frequency=60,
+            start_timestamp=dt.datetime(2024, 3, 5, 10, 0, 0), trigger_time=0.0005,
+            channels={"IA": {"uu": "A", "ph": "A", "primary": 600.0, "secondary": 5.0},
+                      "TRIP": {"y": 1}})
+        self.assertEqual(obj.analog_channel_ids, ["IA", "VA"])
+        self.assertEqual(obj.status_channel_ids, ["TRIP"])
+        self.assertEqual(obj.cfg.sample_rates, [[4000.0, 4]])
+        self.assertAlmostEqual(obj.trigger_time, 0.0005)
+        for ft in WRITE_FORMATS:
+            with self.subTest(ft=ft):
+                obj.save(self.cfg_path, ft=ft)
+                saved = comtrade.load(self.cfg_path, ignore_warnings=True)
+                self.assertEqual((saved.station_name, saved.rec_dev_id, saved.rev_year),
+                                 ("SUB", "REL1", "2013"))
+                self.assertEqual(saved.frequency, 60.0)
+                self.assertEqual(saved.start_timestamp, dt.datetime(2024, 3, 5, 10, 0, 0))
+                self.assertEqual(saved.trigger_timestamp,
+                                 dt.datetime(2024, 3, 5, 10, 0, 0, 500))
+                channel = saved.cfg.analog_channels[0]
+                self.assertEqual((channel.uu, channel.ph, channel.primary,
+                                  channel.secondary), ("A", "A", 600.0, 5.0))
+                self.assertEqual(saved.cfg.status_channels[0].y, 1)
+                self.assertEqual(list(saved.status[0]), [0, 0, 1, 1])
+                for t_expected, t_actual in zip(obj.time, saved.time):
+                    self.assertAlmostEqual(t_actual, t_expected, places=9)
+                for expected, actual in zip(obj.analog, saved.analog):
+                    for v_expected, v_actual in zip(expected, actual):
+                        if math.isnan(v_expected):
+                            self.assertTrue(math.isnan(v_actual))
+                        else:
+                            self.assertAlmostEqual(v_actual, v_expected,
+                                                   delta=13800 * WRITE_FORMAT_TOLERANCE[ft])
+
+    def test_datetime_index(self):
+        pd = comtrade.pd
+        index = pd.date_range("2024-03-05 10:00:00.000000250", periods=3,
+                              freq="1ms", tz="America/Sao_Paulo")
+        df = pd.DataFrame({"x": [1.0, 2.0, 3.0]}, index=index)
+        obj = comtrade.from_dataframe(df, trigger_timestamp=index[1], ft="BINARY")
+        obj.save(self.cfg_path)
+        saved = comtrade.load(self.cfg_path, ignore_warnings=True)
+        self.assertEqual(saved.ft, "BINARY")
+        self.assertEqual(saved.start_timestamp_ns, index[0].tz_localize(None).value)
+        self.assertEqual(saved.trigger_timestamp_ns, index[1].tz_localize(None).value)
+        self.assertEqual(saved.cfg.time_code, "-3")
+        self.assertEqual(saved.start_timestamp_utc,
+                         dt.datetime(2024, 3, 5, 13, 0, tzinfo=dt.timezone.utc))
+        self.assertEqual(saved.cfg.sample_rates, [[1000.0, 3]])
+
+    def test_timedelta_index_not_uniform(self):
+        pd = comtrade.pd
+        df = pd.DataFrame({"x": [1.0, 2.0, 3.0]},
+                          index=pd.to_timedelta([0, 100, 350], unit="ms"))
+        obj = comtrade.from_dataframe(df)
+        obj.save(self.cfg_path)
+        saved = comtrade.load(self.cfg_path, ignore_warnings=True)
+        self.assertTrue(saved.cfg.timestamp_critical)
+        self.assertEqual([round(t, 6) for t in saved.time], [0.0, 0.1, 0.35])
+
+    def test_to_dataframe_round_trip(self):
+        original = comtrade.load("tests/sample_files/sample_ascii.cfg",
+                                 ignore_warnings=True)
+        for index_type in ("time", "sample"):
+            with self.subTest(index_type=index_type):
+                df = original.to_dataframe(index_type=index_type)
+                obj = comtrade.from_dataframe(df, start_timestamp=original.start_timestamp)
+                self.assertEqual(obj.analog_channel_ids, original.analog_channel_ids)
+                self.assertEqual(obj.status_channel_ids, original.status_channel_ids)
+                obj.save(self.cfg_path, ft="FLOAT32")
+                saved = comtrade.load(self.cfg_path, ignore_warnings=True)
+                self.assertEqual(saved.cfg.sample_rates, original.cfg.sample_rates)
+                self.assertEqual(_channel_values(saved), _channel_values(original))
+
+    def test_sample_rate_and_status_columns(self):
+        pd = comtrade.pd
+        df = pd.DataFrame({"tap": [0, 1, 1], "breaker": [1.0, 0.0, 1.0]})
+        obj = comtrade.from_dataframe(df, sample_rate=960, status_columns=["breaker"])
+        self.assertEqual(obj.analog_channel_ids, ["tap"])
+        self.assertEqual(obj.status_channel_ids, ["breaker"])
+        self.assertEqual(obj.cfg.sample_rates, [[960.0, 3]])
+        self.assertEqual(list(obj.status[0]), [1, 0, 1])
+
+    def test_missing_time_values(self):
+        df = comtrade.pd.DataFrame({"x": [1.0, 2.0]})
+        with self.assertRaises(comtrade.ComtradeError):
+            comtrade.from_dataframe(df)
+        df = comtrade.pd.DataFrame({"x": [1.0, 2.0]}, index=[1.0, 0.5])
+        with self.assertRaises(comtrade.ComtradeError):
+            comtrade.from_dataframe(df)
 
 
 if __name__ == "__main__":

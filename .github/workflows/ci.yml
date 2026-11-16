@@ -41,8 +41,9 @@ jobs:
       - name: Test without numpy
         run: uv run pytest
       # numpy is opt-in (use_numpy_arrays=True), so this second run covers both code paths.
-      - name: Test with numpy
-        run: uv run --extra numpy pytest
+      # pandas enables the DataFrame tests (to_dataframe and from_dataframe).
+      - name: Test with numpy and pandas
+        run: uv run --extra numpy --extra pandas pytest
 
   build:
     runs-on: ubuntu-latest

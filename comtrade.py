@@ -21,7 +21,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-__version__ = "0.2.1"
+__version__ = "0.3.0"
 
 import array
 import bisect
@@ -114,6 +114,28 @@ _WARNING_INVALID_LEAP_SECOND = "Invalid leap second indicator \"{}\". Ignoring i
 
 # IEEE C37.232 time code, such as "-5h30", "+10", or "0"
 _re_time_code = re.compile(r"(?i)^([+-]?)([0-9]{1,2})(?:h([0-9]{1,2}))?$")
+
+# File writing
+# revisions which files can be written
+_WRITABLE_REVISIONS = (REV_1999, REV_2001, REV_2013)
+# DAT file formats introduced by the 2013 revision
+_FORMATS_2013 = (_TYPE_BINARY32, _TYPE_FLOAT32)
+# maximum absolute raw value of the integer DAT file formats (the values
+# beyond are missing data markers)
+_INT_LIMITS = {_TYPE_ASCII: 99998, _TYPE_BINARY: 32767,
+               _TYPE_BINARY32: 2147483647}
+# missing data markers
+_ASCII_MISSING = "99999"
+# most negative single precision value (-3.40282347E+38, 0xFF7FFFFF)
+_FLOAT32_MISSING = -3.4028234663852886e+38
+_BINARY_MISSING = {_TYPE_BINARY: -32768, _TYPE_BINARY32: -2147483648,
+                   _TYPE_FLOAT32: _FLOAT32_MISSING}
+_BINARY_ANALOG_TYPECODE = {_TYPE_BINARY: "h", _TYPE_BINARY32: "i",
+                           _TYPE_FLOAT32: "f"}
+# maximum timestamp value (0xFFFFFFFF marks missing timestamps)
+_MAX_TIMESTAMP = 0xFFFFFFFE
+# CRLF line endings, as required by the standard
+_NEWLINE = "\r\n"
 
 
 class ComtradeError(Exception):
@@ -396,6 +418,135 @@ def _replace_sub(line: str) -> str:
     """Replace <sub> (0x1A) control character that may appear appended to the end
     of text files on some platforms."""
     return line.replace(chr(0x1A), "")
+
+
+def _values_list(values) -> list:
+    """Return channel values (array.array, numpy array or list) as a list."""
+    return values.tolist() if hasattr(values, "tolist") else list(values)
+
+
+def _format_number(value) -> str:
+    """Format a number for CFG files, without a fractional part if integer,
+    otherwise with the shortest representation that reads back the same."""
+    value = float(value)
+    if value.is_integer() and abs(value) < 1E15:
+        return str(int(value))
+    return repr(value)
+
+
+def _check_field(value, description: str) -> str:
+    """Return a CFG text field, which can't contain separators or line breaks."""
+    value = str(value)
+    if any(char in value for char in (_SEPARATOR, "\r", "\n")):
+        raise ComtradeError("{} can't contain commas or line breaks: \"{}\"".format(
+            description, value))
+    return value
+
+
+def _format_timestamp(timestamp_ns: int, nanoseconds: bool) -> str:
+    """Format a timestamp (nanoseconds since 1970-01-01) as dd/mm/yyyy,hh:mm:ss
+    with microseconds or nanoseconds."""
+    microseconds, nanosecond = divmod(timestamp_ns, 1000)
+    t = _EPOCH + dt.timedelta(microseconds=microseconds)
+    text = "{:02d}/{:02d}/{:04d},{:02d}:{:02d}:{:02d}.{:06d}".format(
+        t.day, t.month, t.year, t.hour, t.minute, t.second, t.microsecond)
+    if nanoseconds:
+        text += "{:03d}".format(nanosecond)
+    return text
+
+
+def _format_time_code(offset: Union[dt.timedelta, None]) -> str:
+    """Format a time difference to UTC as an IEEE C37.232 time code, such as
+    "-5h30", "+10" or "0". Returns an empty string for unknown offsets."""
+    if offset is None:
+        return ""
+    minutes = offset // dt.timedelta(minutes=1)
+    if minutes == 0:
+        return "0"
+    hours, minutes = divmod(abs(minutes), 60)
+    sign = "-" if offset < dt.timedelta(0) else "+"
+    return sign + str(hours) + ("h{:02d}".format(minutes) if minutes else "")
+
+
+def _detect_sample_rates(times: list) -> list:
+    """Return the sample rates list ([[samp, endsamp]]) of time values: their
+    sample rate, if uniformly sampled, otherwise 0 (no fixed sample rate)."""
+    count = len(times)
+    if count >= 2:
+        period = (times[-1] - times[0]) / (count - 1)
+        if period > 0:
+            # tolerance of time values stored with single precision
+            tolerance = period * 1E-3 + \
+                max(abs(times[0]), abs(times[-1])) * 2.4E-7
+            if all(abs(t1 - t0 - period) <= tolerance
+                   for t0, t1 in itertools.pairwise(times)):
+                rate = 1.0 / period
+                if abs(rate - round(rate)) <= rate * 1E-6:
+                    rate = float(round(rate))
+                return [[rate, count]]
+    return [[0.0, count]]
+
+
+def _encode_analog(values: list, channel, ft: str, keep_scaling: bool) -> tuple:
+    """Return the DAT file raw values of an analog channel and its a, b, min
+    and max CFG fields. Missing (NaN) values are None.
+
+    The channel's a and b are kept if keep_scaling is set and the values fit
+    the format range with them. Otherwise, they are computed to use the whole
+    range of integer formats, or set to a=1 and b=0 for FLOAT32."""
+    a, b = channel.a, channel.b
+    if ft == _TYPE_FLOAT32:
+        if not keep_scaling or a == 0:
+            a, b = 1.0, 0.0
+        raw = [None if math.isnan(v) else (v - b) / a for v in values]
+        finite = [r for r in raw if r is not None and math.isfinite(r)]
+        cmin, cmax = (min(finite), max(finite)) if finite else (0.0, 0.0)
+        return raw, a, b, cmin, cmax
+
+    limit = _INT_LIMITS[ft]
+    cmin, cmax = -limit, limit
+    finite = [v for v in values if math.isfinite(v)]
+    if finite:
+        vmin, vmax = min(finite), max(finite)
+        fits = keep_scaling and a != 0 and \
+            all(abs(round((v - b) / a)) <= limit for v in (vmin, vmax))
+        if fits:
+            cmin, cmax = channel.cmin, channel.cmax
+        else:
+            b = (vmax + vmin) / 2
+            a = (vmax - vmin) / (2 * limit)
+            if a == 0:
+                a = 1.0
+    elif not keep_scaling:
+        a, b = 1.0, 0.0
+    raw = [max(-limit, min(limit, round((v - b) / a))) if math.isfinite(v)
+           else None for v in values]
+    return raw, a, b, cmin, cmax
+
+
+def _to_crlf(text: str) -> str:
+    """Return text with CRLF line endings."""
+    return text.replace("\r\n", "\n").replace("\n", _NEWLINE)
+
+
+def _is_status_series(series) -> bool:
+    """Return whether a pandas Series has status values: booleans, or integers
+    with only 0 and 1 values."""
+    if pd.api.types.is_bool_dtype(series):
+        return True
+    return pd.api.types.is_integer_dtype(series) and \
+        bool(series.isin([0, 1]).all())
+
+
+def _to_timestamp_ns(value) -> tuple:
+    """Return a timestamp (datetime, pandas Timestamp or string) as
+    nanoseconds since 1970-01-01, in its own time zone, and its time difference
+    to UTC (None for naive timestamps). Requires pandas."""
+    stamp = pd.Timestamp(value)
+    offset = stamp.utcoffset()
+    if offset is not None:
+        stamp = stamp.tz_localize(None)
+    return stamp.value, offset
 
 
 class Cfg:
@@ -867,6 +1018,10 @@ class Comtrade:
         )
         self._analog_values = []
         self._status_values = []
+        self._total_samples = 0
+        # whether the analog channels a and b fields came from a DAT file
+        # (to keep them when saving in the same format)
+        self._scaling_from_file = False
         # time values of each analog channel, with the channel time skew
         # (computed when first accessed)
         self._analog_time_values = None
@@ -1182,6 +1337,7 @@ class Comtrade:
         self._analog_values = dat.analog
         self._status_values = dat.status
         self._total_samples = dat.total_samples
+        self._scaling_from_file = True
         self._analog_time_values = None
         self._analog_scaled_values = {}
         # keep the reader of lazy loaded data, to close its file
@@ -1214,6 +1370,375 @@ class Comtrade:
                 pass
             return df
         raise ComtradeError("pandas package is not installed.")
+
+    @classmethod
+    def from_dataframe(cls, df: "pd.DataFrame", **kwargs) -> "Comtrade":
+        """
+        Create a Comtrade object with the data of a pandas DataFrame, which
+        can be saved as COMTRADE files with save(). Each column is a channel
+        named after it.
+
+        The time values are the DataFrame index: seconds (numbers), a
+        DatetimeIndex or a TimedeltaIndex. A "time" column is used instead of
+        a default RangeIndex, such as with to_dataframe(index_type="sample").
+
+        Keyword arguments:
+        station_name -- station name (Default: "")
+        rec_dev_id -- recording device id (Default: "")
+        rev_year -- COMTRADE revision year (Default: "2013")
+        ft -- DAT file format saved by default: "ASCII", "BINARY",
+            "BINARY32" or "FLOAT32" (Default: "ASCII")
+        frequency -- line frequency in Hertz (Default: 0, unknown)
+        time_column -- name of the column with the time values, instead of
+            the index (Default: None)
+        sample_rate -- samples per second of uniformly sampled data, to
+            compute the time values instead of reading them (Default: None)
+        start_timestamp -- timestamp of the first sample, as a datetime,
+            pandas Timestamp or string (Default: the first DatetimeIndex value,
+            or 1900-01-01 00:00:00)
+        trigger_timestamp -- trigger timestamp (Default: start_timestamp)
+        trigger_time -- alternatively, the trigger time in the scale of the
+            time values, in seconds
+        time_code, local_code -- time codes of the 2013 revision, such as
+            "-3" (Default: from timezone aware timestamps, otherwise unknown)
+        status_columns -- names of the status channel columns (Default: the
+            boolean columns and the integer columns with only 0 and 1 values)
+        channels -- dict of channel description fields per column name: uu,
+            ph, ccbm, skew, primary, secondary and pors of analog channels; ph,
+            ccbm and y of status channels. For instance,
+            {"IA": {"uu": "A", "ph": "A", "primary": 600, "secondary": 5}}
+            (Default: None)
+
+        Other keyword arguments are passed to the Comtrade constructor. Values
+        are stored with double precision, unless use_double_precision=False.
+        """
+        if not _HAS_PANDAS:
+            raise ComtradeError("pandas package is not installed.")
+        options = dict(kwargs)
+        options.setdefault("use_double_precision", True)
+        rec = cls(**options)
+        cfg = rec._cfg
+
+        rev_year = str(kwargs.get("rev_year", REV_2013))
+        ft = kwargs.get("ft", _TYPE_ASCII).upper()
+        count = len(df)
+
+        # time values
+        time_column = kwargs.get("time_column", None)
+        sample_rate = kwargs.get("sample_rate", None)
+        is_range_index = isinstance(df.index, pd.RangeIndex)
+        if time_column is None and is_range_index and "time" in df.columns:
+            time_column = "time"
+        if time_column is not None:
+            times_src = df[time_column]
+            data = df.drop(columns=[time_column])
+        else:
+            times_src = df.index
+            data = df
+            if is_range_index and not sample_rate:
+                raise ComtradeError("Missing time values: set the DataFrame "
+                                    "index to the time values, or use the "
+                                    "time_column or sample_rate arguments.")
+
+        start_ns, offset = _timestamp_ns(dt.datetime(1900, 1, 1), 0), None
+        if sample_rate:
+            times = [i / sample_rate for i in range(count)]
+        elif pd.api.types.is_datetime64_any_dtype(times_src):
+            stamps = pd.DatetimeIndex(times_src)
+            if count > 0:
+                start_ns, offset = _to_timestamp_ns(stamps[0])
+            if stamps.tz is not None:
+                stamps = stamps.tz_localize(None)
+            times = ((stamps - stamps[0]) / pd.Timedelta(seconds=1)).tolist() \
+                if count > 0 else []
+        elif pd.api.types.is_timedelta64_dtype(times_src):
+            times = (pd.TimedeltaIndex(times_src) / pd.Timedelta(seconds=1)).tolist()
+        else:
+            times = [float(t) for t in times_src]
+        if any(t1 < t0 for t0, t1 in itertools.pairwise(times)):
+            raise ComtradeError("The time values must be in increasing order.")
+        # time relative to the first sample
+        first_time = times[0] if times else 0.0
+        times = [t - first_time for t in times]
+
+        # start and trigger timestamps
+        if kwargs.get("start_timestamp", None) is not None:
+            start_ns, offset = _to_timestamp_ns(kwargs["start_timestamp"])
+        if kwargs.get("trigger_timestamp", None) is not None:
+            trigger_ns, _ = _to_timestamp_ns(kwargs["trigger_timestamp"])
+        elif kwargs.get("trigger_time", None) is not None:
+            trigger_ns = start_ns + round((kwargs["trigger_time"] - first_time) * 1E9)
+        else:
+            trigger_ns = start_ns
+
+        # channels
+        channel_info = kwargs.get("channels", None) or {}
+        status_columns = kwargs.get("status_columns", None)
+        if status_columns is None:
+            status_columns = [column for column in data.columns
+                              if _is_status_series(data[column])]
+        status_columns = set(status_columns)
+        analog_columns = [c for c in data.columns if c not in status_columns]
+        status_columns = [c for c in data.columns if c in status_columns]
+        analog_channels = [AnalogChannel(i + 1, 1.0, name=str(column),
+                                         **channel_info.get(column, {}))
+                           for i, column in enumerate(analog_columns)]
+        status_channels = [StatusChannel(i + 1, name=str(column),
+                                         **channel_info.get(column, {}))
+                           for i, column in enumerate(status_columns)]
+
+        # CFG data
+        cfg._station_name = str(kwargs.get("station_name", ""))
+        cfg._rec_dev_id = str(kwargs.get("rec_dev_id", ""))
+        cfg._rev_year = rev_year
+        cfg._analog_channels = analog_channels
+        cfg._status_channels = status_channels
+        cfg._analog_count = len(analog_channels)
+        cfg._status_count = len(status_channels)
+        cfg._channels_count = cfg._analog_count + cfg._status_count
+        cfg._frequency = float(kwargs.get("frequency", 0.0))
+        if sample_rate:
+            cfg._sample_rates = [[float(sample_rate), count]]
+        else:
+            cfg._sample_rates = _detect_sample_rates(times)
+        cfg._nrates = 1
+        cfg._timestamp_critical = cfg._sample_rates[0][0] == 0
+        cfg._start_timestamp = _EPOCH + dt.timedelta(microseconds=start_ns // 1000)
+        cfg._start_nanosecond = start_ns % 1000
+        cfg._trigger_timestamp = _EPOCH + dt.timedelta(microseconds=trigger_ns // 1000)
+        cfg._trigger_nanosecond = trigger_ns % 1000
+        cfg._time_base = cfg._get_time_base(
+            cfg._start_nanosecond != 0 or cfg._trigger_nanosecond != 0)
+        cfg._ft = ft
+        cfg._time_multiplier = 1.0
+        cfg._time_code = str(kwargs.get("time_code", _format_time_code(offset)))
+        cfg._local_code = str(kwargs.get("local_code", cfg._time_code))
+        cfg._time_offset = _parse_time_code(cfg._time_code, rec.ignore_warnings)
+        cfg._local_offset = _parse_time_code(cfg._local_code, rec.ignore_warnings)
+
+        # channel values
+        float_type = "d" if rec._use_double_precision else "f"
+
+        def stored(values, typecode):
+            target = _preallocate_values(typecode, count, rec._use_numpy_arrays)
+            _copy_values(target, 0, values)
+            return target
+
+        rec._time_values = stored(times, float_type)
+        rec._analog_values = [
+            stored(data[column].to_numpy(dtype=float).tolist(), float_type)
+            for column in analog_columns]
+        rec._status_values = [
+            stored([1 if value else 0 for value in data[column].tolist()], "i")
+            for column in status_columns]
+        rec._total_samples = count
+        rec._cfg_extract_channels_ids(cfg)
+        rec._cfg_extract_phases(cfg)
+        return rec
+
+    def save(self, cfg_file, dat_file=None, **kwargs) -> None:
+        """
+        Save the data as COMTRADE files: CFG and DAT files, plus the HDR and
+        INF files if there is HDR or INF data, or a single CFF file (2013
+        revision) if cfg_file has the CFF extension.
+
+        dat_file is optional, and may be set if the DAT file name differs from
+            the CFG file name.
+
+        Analog values are written in the units of the analog property. For
+        the integer formats (ASCII, BINARY and BINARY32), each channel's a and
+        b fields are computed to use the whole range of the format, unless
+        they were loaded from a DAT file of the same format and the values
+        still fit (so loaded files are saved unchanged). FLOAT32 files keep the
+        values as they are (a=1 and b=0). Missing values (NaN) are written as
+        the missing data marker of the format.
+
+        Time values are written as DAT timestamps. If the samples are
+        uniformly spaced, the sample rate is written too. If the first time
+        value isn't zero (e.g., time window loaded), the start timestamp is
+        moved to the first sample.
+
+        Keyword arguments:
+        ft -- DAT file format: "ASCII", "BINARY", "BINARY32" or "FLOAT32"
+            (Default: the ft property)
+        rev_year -- COMTRADE revision year: "1999", "2001" or "2013" (Default:
+            the rev_year property, or "2013" if it's "1991")
+        encoding -- encoding of the text files (Default: "utf-8")
+        """
+        rev_year = str(kwargs.get("rev_year", self.rev_year
+                                  if self.rev_year in _WRITABLE_REVISIONS
+                                  else REV_2013))
+        ft = (kwargs.get("ft", None) or self.ft or _TYPE_ASCII).upper()
+        encoding = kwargs.get("encoding", "utf-8")
+        if rev_year not in _WRITABLE_REVISIONS:
+            raise ComtradeError("Can't write COMTRADE files of revision {}. "
+                                "Use one of: {}.".format(
+                                    rev_year, ", ".join(_WRITABLE_REVISIONS)))
+        if ft not in _INT_LIMITS and ft != _TYPE_FLOAT32:
+            raise ComtradeError("Not supported data file format: {}".format(ft))
+        if ft in _FORMATS_2013 and rev_year != REV_2013:
+            raise ComtradeError("{} data files require the 2013 revision.".format(ft))
+
+        cfg_text, dat_data = self._build_files(ft, rev_year)
+
+        file_ext = cfg_file[-3:]
+        if file_ext.upper() == "CFF":
+            if rev_year != REV_2013:
+                raise ComtradeError("CFF files require the 2013 revision.")
+            sections = [("CFG", cfg_text), ("INF", self._inf or ""),
+                        ("HDR", self._hdr or "")]
+            contents = b""
+            for name, text in sections:
+                text = _to_crlf(text)
+                if text and not text.endswith(_NEWLINE):
+                    text += _NEWLINE
+                contents += "--- file type: {} ---{}{}".format(
+                    name, _NEWLINE, text).encode(encoding)
+            if ft == _TYPE_ASCII:
+                contents += "--- file type: DAT ASCII ---{}".format(
+                    _NEWLINE).encode(encoding) + dat_data
+            else:
+                contents += "--- file type: DAT {}: {} ---{}".format(
+                    ft, len(dat_data), _NEWLINE).encode(encoding) + dat_data
+            with open(cfg_file, "wb") as file:
+                file.write(contents)
+            return
+
+        if file_ext.upper() != "CFG":
+            raise ComtradeError(r"Expected CFG or CFF file path, instead got \"{}\".".format(cfg_file))
+        basename = cfg_file[:-3]
+        if dat_file is None:
+            dat_file = basename + _get_same_case(file_ext, self.EXT_DAT)
+        files = [(cfg_file, cfg_text.encode(encoding)), (dat_file, dat_data)]
+        for ext, text in ((self.EXT_INF, self._inf), (self.EXT_HDR, self._hdr)):
+            if text:
+                files.append((basename + _get_same_case(file_ext, ext),
+                              _to_crlf(text).encode(encoding)))
+        for path, contents in files:
+            with open(path, "wb") as file:
+                file.write(contents)
+
+    def _build_files(self, ft: str, rev_year: str) -> tuple:
+        """Return the CFG file text and the DAT file contents (bytes)."""
+        cfg = self._cfg
+        if len(self.analog) != cfg.analog_count or \
+                len(self.status) != cfg.status_count:
+            raise ComtradeError("The number of channel values differs from the "
+                                "number of channels.")
+        times = _values_list(self.time)
+        count = len(times)
+        if any(t1 < t0 for t0, t1 in itertools.pairwise(times)):
+            raise ComtradeError("The time values must be in increasing order.")
+
+        # The first sample is at the start timestamp: time values (relative to
+        # the start timestamp) not starting at zero move it.
+        start_ns = cfg.start_timestamp_ns
+        trigger_ns = cfg.trigger_timestamp_ns
+        nanoseconds = cfg.time_base < Cfg.TIME_BASE_MICRO_SEC or \
+            start_ns % 1000 != 0 or trigger_ns % 1000 != 0
+        unit_ns = 1 if nanoseconds else 1000
+        first_time = times[0] if count else 0.0
+        if first_time != 0.0:
+            start_ns += round(first_time * 1E9 / unit_ns) * unit_ns
+            times = [t - first_time for t in times]
+
+        # sample rates: the CFG ones if they still describe the samples,
+        # otherwise detected from the time values
+        sample_rates = cfg.sample_rates
+        if sample_rates and sample_rates[-1][1] == count and first_time == 0.0:
+            nrates = 0 if cfg.timestamp_critical else len(sample_rates)
+        else:
+            sample_rates = _detect_sample_rates(times)
+            nrates = 0 if sample_rates[0][0] == 0 else 1
+
+        # DAT timestamps, in time base units times the time multiplier
+        time_unit = unit_ns * 1E-9
+        max_timestamp = round(times[-1] / time_unit) if count else 0
+        timemult = 1 if max_timestamp <= _MAX_TIMESTAMP else \
+            math.ceil(max_timestamp / _MAX_TIMESTAMP)
+        timestamps = [round(t / (time_unit * timemult)) for t in times]
+
+        # channels
+        keep_scaling = self._scaling_from_file and ft == self.ft.upper()
+        analog_lines = []
+        analog_raw = []
+        for channel, values in zip(cfg.analog_channels, self.analog):
+            raw, a, b, cmin, cmax = _encode_analog(_values_list(values), channel,
+                                                   ft, keep_scaling)
+            analog_raw.append(raw)
+            analog_lines.append(_SEPARATOR.join([
+                str(channel.n),
+                _check_field(channel.name, "Channel names"),
+                _check_field(channel.ph, "Channel phases"),
+                _check_field(channel.ccbm, "Channel circuit components"),
+                _check_field(channel.uu, "Channel units"),
+                _format_number(a), _format_number(b),
+                _format_number(channel.skew),
+                _format_number(cmin), _format_number(cmax),
+                _format_number(channel.primary),
+                _format_number(channel.secondary),
+                _check_field(channel.pors, "Channel PS fields")]))
+        status_values = [[1 if value else 0 for value in _values_list(values)]
+                         for values in self.status]
+        status_lines = [_SEPARATOR.join([
+            str(channel.n),
+            _check_field(channel.name, "Channel names"),
+            _check_field(channel.ph, "Channel phases"),
+            _check_field(channel.ccbm, "Channel circuit components"),
+            str(channel.y)]) for channel in cfg.status_channels]
+
+        # CFG file
+        lines = [_SEPARATOR.join([_check_field(cfg.station_name, "Station name"),
+                                  _check_field(cfg.rec_dev_id, "Recording device id"),
+                                  rev_year]),
+                 "{},{}A,{}D".format(cfg.analog_count + cfg.status_count,
+                                     cfg.analog_count, cfg.status_count)]
+        lines += analog_lines
+        lines += status_lines
+        lines.append(_format_number(cfg.frequency))
+        lines.append(str(nrates))
+        lines += ["{},{}".format(_format_number(samp), int(endsamp))
+                  for samp, endsamp in sample_rates]
+        lines.append(_format_timestamp(start_ns, nanoseconds))
+        lines.append(_format_timestamp(trigger_ns, nanoseconds))
+        lines.append(ft)
+        lines.append(_format_number(timemult))
+        if rev_year == REV_2013:
+            lines.append(_SEPARATOR.join([
+                _check_field(cfg.time_code, "Time code"),
+                _check_field(cfg.local_code, "Local code")]))
+            lines.append(_SEPARATOR.join([
+                "" if cfg.tmq_code is None else "{:X}".format(cfg.tmq_code),
+                "" if cfg.leap_second is None else str(cfg.leap_second)]))
+        cfg_text = _NEWLINE.join(lines) + _NEWLINE
+
+        # DAT file
+        sample_numbers = range(1, count + 1)
+        if ft == _TYPE_ASCII:
+            columns = [map(str, sample_numbers), map(str, timestamps)]
+            columns += [[_ASCII_MISSING if value is None else str(value)
+                         for value in raw] for raw in analog_raw]
+            columns += [map(str, values) for values in status_values]
+            dat_data = "".join(_SEPARATOR.join(row) + _NEWLINE
+                               for row in zip(*columns)).encode("ascii")
+        else:
+            missing = _BINARY_MISSING[ft]
+            # groups of 16 status channels, one bit each
+            status_words = []
+            for igroup in range(0, len(status_values), 16):
+                words = [0] * count
+                for bit, values in enumerate(status_values[igroup:igroup + 16]):
+                    words = [word | (value << bit) for word, value in zip(words, values)]
+                status_words.append(words)
+            row_struct = struct.Struct("<II" +
+                                       _BINARY_ANALOG_TYPECODE[ft] * len(analog_raw) +
+                                       "H" * len(status_words))
+            columns = [sample_numbers, timestamps]
+            columns += [[missing if value is None else value for value in raw]
+                        for raw in analog_raw]
+            columns += status_words
+            dat_data = b"".join(row_struct.pack(*row) for row in zip(*columns))
+        return cfg_text, dat_data
 
     def load(self, cfg_file, dat_file=None, **kwargs) -> "Comtrade":
         """
@@ -1920,7 +2445,7 @@ class _Float32DatReader(_BinaryDatReader):
         # Most negative single precision value (-3.40282347E+38), the missing
         # data marker of the FLOAT32 format. It has to be the single precision
         # value, since the values are converted to double precision when read.
-        self.DATA_MISSING = -3.4028234663852886e+38
+        self.DATA_MISSING = _FLOAT32_MISSING
 
 
 def load(cfg_or_cff_file_path, dat_file_path=None, **kwargs) -> Comtrade:
@@ -1933,4 +2458,10 @@ def load_as_dataframe(cfg_or_cff_file_path, dat_file_path=None, **kwargs) -> "pd
     return Comtrade(**kwargs).load(cfg_or_cff_file_path,
                                    dat_file_path,
                                    use_numpy_arrays=True, **kwargs).to_dataframe(**kwargs)
+
+
+def from_dataframe(df: "pd.DataFrame", **kwargs) -> Comtrade:
+    """Create a Comtrade object with the data of a pandas DataFrame, which can
+    be saved as COMTRADE files with save(). See Comtrade.from_dataframe()."""
+    return Comtrade.from_dataframe(df, **kwargs)
 
