@@ -818,6 +818,96 @@ class TestCffEncodingHandling(unittest.TestCase):
         self.assertEqual(obj.status_count, 1)
  
 
+class TestUtf8Bom(unittest.TestCase):
+    """Files with a UTF-8 BOM (EF BB BF), read with the default UTF-8
+    encoding."""
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        for ext in ("cfg", "dat"):
+            shutil.copy(f"tests/sample_files/sample_ascii.{ext}",
+                        os.path.join(self.tmp_dir, f"sample.{ext}"))
+        self.cfg_path = os.path.join(self.tmp_dir, "sample.cfg")
+        self.dat_path = os.path.join(self.tmp_dir, "sample.dat")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp_dir)
+
+    @staticmethod
+    def _with_bom(path: str) -> bytes:
+        with open(path, "rb") as file:
+            return b"\xef\xbb\xbf" + file.read()
+
+    def _write_cfg_with_bom(self):
+        with open(self.cfg_path, "wb") as file:
+            file.write(self._with_bom("tests/sample_files/sample_ascii.cfg"))
+
+    def test_cfg(self):
+        self._write_cfg_with_bom()
+        obj = Comtrade(ignore_warnings=True).load(self.cfg_path)
+        self.assertEqual(obj.station_name, "SMARTSTATION")
+        self.assertEqual(obj.rec_dev_id, "IED123")
+        self.assertEqual(obj.start_timestamp,
+                         dt.datetime(2011, 1, 12, 5, 55, 30, 75011))
+
+    def test_dat(self):
+        expected = Comtrade(ignore_warnings=True).load(self.cfg_path)
+        with open(self.dat_path, "wb") as file:
+            file.write(self._with_bom("tests/sample_files/sample_ascii.dat"))
+        obj = Comtrade(ignore_warnings=True).load(self.cfg_path)
+        self.assertEqual(obj.total_samples, expected.total_samples)
+        self.assertEqual(list(obj.time), list(expected.time))
+        self.assertEqual(list(obj.analog[0]), list(expected.analog[0]))
+        self.assertEqual(list(obj.status[0]), list(expected.status[0]))
+
+    def test_read_text(self):
+        with open("tests/sample_files/sample_ascii.cfg", encoding="utf-8") as file:
+            cfg_text = file.read()
+        with open("tests/sample_files/sample_ascii.dat", encoding="utf-8") as file:
+            dat_text = file.read()
+        obj = Comtrade(ignore_warnings=True)
+        obj.read("\ufeff" + cfg_text, "\ufeff" + dat_text)
+        self.assertEqual(obj.station_name, "SMARTSTATION")
+        self.assertEqual(obj.total_samples, 40)
+        self.assertEqual(list(obj.analog[0])[0], -9.39605712890625)
+
+    def test_read_dat_bytes(self):
+        with open("tests/sample_files/sample_ascii.cfg", encoding="utf-8") as file:
+            cfg_text = file.read()
+        with open("tests/sample_files/sample_ascii.dat", "rb") as file:
+            dat_bytes = b"\xef\xbb\xbf" + file.read()
+        obj = Comtrade(ignore_warnings=True)
+        obj.read(cfg_text, dat_bytes)
+        self.assertEqual(obj.total_samples, 40)
+        self.assertEqual(list(obj.analog[0])[0], -9.39605712890625)
+
+    def test_cff(self):
+        expected = Comtrade(ignore_warnings=True).load(
+            "tests/sample_files/sample_ascii.cff")
+        path = os.path.join(self.tmp_dir, "sample_bom.cff")
+        with open(path, "wb") as file:
+            file.write(self._with_bom("tests/sample_files/sample_ascii.cff"))
+        obj = Comtrade(ignore_warnings=True).load(path)
+        self.assertEqual(obj.station_name, "SMARTSTATION")
+        self.assertEqual(obj.rev_year, "2013")
+        self.assertEqual(obj.cfg.tmq_code, 0xB)
+        self.assertEqual(obj.total_samples, expected.total_samples)
+        self.assertEqual(list(obj.analog[0]), list(expected.analog[0]))
+        self.assertEqual(list(obj.status[0]), list(expected.status[0]))
+
+    def test_inf_and_hdr(self):
+        inf_path = os.path.join(self.tmp_dir, "sample.inf")
+        hdr_path = os.path.join(self.tmp_dir, "sample.hdr")
+        with open(inf_path, "wb") as file:
+            file.write(b"\xef\xbb\xbf[Public Record_Information]\nSource=IED123\n")
+        with open(hdr_path, "wb") as file:
+            file.write(b"\xef\xbb\xbfRelay event record\n")
+        obj = Comtrade(ignore_warnings=True).load(self.cfg_path)
+        self.assertEqual(obj.inf, "[Public Record_Information]\nSource=IED123\n")
+        self.assertEqual(obj.hdr, "Relay event record\n")
+        inf = obj.inf_sections()
+        self.assertEqual(inf["Public Record_Information"]["Source"], "IED123")
+
+
 class TestExtensionCaseHandling(unittest.TestCase):
     def test_lower_case(self):
         self.assertEqual(comtrade._get_same_case(".cfg", ".dat"), ".dat")
