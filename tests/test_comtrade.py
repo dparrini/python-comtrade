@@ -628,6 +628,82 @@ class TestEncodingHandling(unittest.TestCase):
         obj = comtrade.load("tests/sample_files/sample_iso8859-1_bin.cfg", encoding="iso-8859-1")
         self.assertEqual(obj.cfg.station_name, "Estação de Medição")
         self.assertEqual(obj.cfg.rec_dev_id, "Oscilógrafo")
+
+
+CFF_ENCODING_CONTENTS = """--- file type: CFG ---
+Estação de Medição,Oscilógrafo,2013
+2,1A,1D
+1, IA,,,A,2.0,1.0,0,-3.40282347E+38,3.40282347E+38,1,1,P
+1, Trip,,,0
+60
+1
+1000,2
+01/01/2020,10:30:00.000000
+01/01/2020,10:30:00.000000
+ASCII
+1
+
+--- file type: HDR ---
+Relé de proteção
+--- file type: INF ---
+[Public Record_Information]
+Source=Medição
+--- file type: DAT ASCII ---
+1,0,1,0
+2,1000,2,1
+"""
+
+
+class TestCffEncodingHandling(unittest.TestCase):
+    """Text encoding of the CFG, HDR and INF sections of a CFF file."""
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp_dir)
+
+    def _write_cff(self, filename: str, encoding: str) -> str:
+        path = os.path.join(self.tmp_dir, filename)
+        with open(path, "w", encoding=encoding, newline="\n") as file:
+            file.write(CFF_ENCODING_CONTENTS)
+        return path
+
+    def test_iso8859_1(self):
+        path = self._write_cff("sample_latin1.cff", "iso-8859-1")
+        obj = Comtrade(ignore_warnings=True).load(path, encoding="iso-8859-1")
+        self.assertEqual(obj.station_name, "Estação de Medição")
+        self.assertEqual(obj.rec_dev_id, "Oscilógrafo")
+        self.assertEqual(obj.hdr, "Relé de proteção")
+        self.assertEqual(obj.inf_sections()["Public Record_Information"]["Source"],
+                         "Medição")
+
+    def test_utf8(self):
+        path = self._write_cff("sample_utf8.cff", "utf-8")
+        obj = Comtrade(ignore_warnings=True).load(path, encoding="utf-8")
+        self.assertEqual(obj.station_name, "Estação de Medição")
+        self.assertEqual(obj.hdr, "Relé de proteção")
+        self.assertEqual(obj.inf_sections()["Public Record_Information"]["Source"],
+                         "Medição")
+
+    def test_default_encoding_is_utf8(self):
+        path = self._write_cff("sample_utf8.cff", "utf-8")
+        obj = Comtrade(ignore_warnings=True).load(path)
+        self.assertEqual(obj.station_name, "Estação de Medição")
+
+    def test_data_values(self):
+        path = self._write_cff("sample_utf8.cff", "utf-8")
+        obj = Comtrade(ignore_warnings=True).load(path)
+        self.assertEqual(obj.total_samples, 2)
+        # analog values are 2 * y + 1
+        self.assertEqual(list(obj.analog[0]), [3.0, 5.0])
+        self.assertEqual(list(obj.status[0]), [0, 1])
+
+    def test_binary_cff_keeps_the_encoding_option(self):
+        obj = Comtrade(ignore_warnings=True)
+        obj.load("tests/sample_files/sample_float32.cff", encoding="iso-8859-1")
+        self.assertEqual(obj.station_name, "EXAMPLE")
+        self.assertEqual(obj.total_samples, 301)
+        self.assertEqual(obj.status_count, 1)
  
 
 class TestExtensionCaseHandling(unittest.TestCase):
