@@ -331,6 +331,64 @@ class TestCfgWithSubCharsReading(TestCfg2Reading):
                                                             "tests/sample_files/sample_ascii.dat")
 
 
+class TestAsciiDatWithSubChars(unittest.TestCase):
+    """ASCII DAT files ending with the <sub> (0x1A) control character, as
+    some platforms append to text files."""
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        for ext in ("cfg", "dat"):
+            shutil.copy(f"tests/sample_files/sample_ascii.{ext}",
+                        os.path.join(self.tmp_dir, f"sample.{ext}"))
+        dat_path = os.path.join(self.tmp_dir, "sample.dat")
+        with open(dat_path, "rb") as file:
+            contents = file.read()
+        with open(dat_path, "wb") as file:
+            file.write(contents.rstrip(b"\r\n") + b"\x1a")
+        self.cfg_path = os.path.join(self.tmp_dir, "sample.cfg")
+        self.expected = Comtrade(ignore_warnings=True).load(
+            "tests/sample_files/sample_ascii.cfg")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp_dir)
+
+    def test_load(self):
+        obj = Comtrade(ignore_warnings=True).load(self.cfg_path)
+        self.assertEqual(obj.total_samples, self.expected.total_samples)
+        self.assertEqual(_channel_values(obj), _channel_values(self.expected))
+
+    def test_read(self):
+        # the <sub> character is appended to the last status value
+        obj = Comtrade(ignore_warnings=True)
+        dat = COMTRADE_SAMPLE_1_DAT.rstrip("\n") + "\x1a"
+        obj.read(COMTRADE_SAMPLE_1_CFG, dat)
+        self.assertEqual(obj.total_samples, 2)
+        self.assertAlmostEqual(obj.analog[0][0], 0.0)
+        self.assertAlmostEqual(obj.analog[0][1], -2.762, places=6)
+        self.assertEqual(list(obj.status[0]), [0, 1])
+
+    def test_read_analog_last_value(self):
+        # the <sub> character is appended to the last analog value
+        dat = COMTRADE_SAMPLE_8_DAT.rstrip("\n") + "\x1a"
+        obj = Comtrade(ignore_warnings=True)
+        obj.read(COMTRADE_SAMPLE_8_CFG.format(format="ASCII"), dat)
+        self.assertEqual(obj.total_samples, 3)
+        self.assertEqual([list(values) for values in obj.analog],
+                         [[1, 4, 7], [2, 5, 8], [3, 6, 9]])
+
+    def test_cff(self):
+        contents = ("--- file type: CFG ---\n" + COMTRADE_SAMPLE_1_CFG +
+                    "--- file type: DAT ASCII ---\n" +
+                    COMTRADE_SAMPLE_1_DAT.rstrip("\n") + "\x1a\n")
+        path = os.path.join(self.tmp_dir, "sample.cff")
+        with open(path, "w", encoding="utf-8") as file:
+            file.write(contents)
+        obj = Comtrade(ignore_warnings=True).load(path)
+        self.assertEqual(obj.total_samples, 2)
+        self.assertAlmostEqual(obj.analog[0][0], 0.0)
+        self.assertAlmostEqual(obj.analog[0][1], -2.762, places=6)
+        self.assertEqual(list(obj.status[0]), [0, 1])
+
+
 class TestCffFloat32Reading(unittest.TestCase):
     """Sample CFF file with float32 .dat contents.
     """
