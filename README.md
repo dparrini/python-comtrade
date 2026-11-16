@@ -75,6 +75,12 @@ The module function `load` must be called with the `CFF` file path specified.
 
 Analog channels may have a time skew (in microseconds) from the start of the sample period, which is not included in `Comtrade.time`. The list `Comtrade.analog_time` stores the time values of each analog channel, with its skew, in seconds, i.e., `Comtrade.analog_time[0]` for `Comtrade.analog[0]`.
 
+`Comtrade.analog` values are in the units recorded in the file, which may be primary (power system)
+or secondary (VT and CT outputs) values, as indicated by each analog channel's `pors` field.
+`Comtrade.analog_primary` and `Comtrade.analog_secondary` lists store the analog values converted
+to primary or secondary units, respectively, using each channel's `primary` and `secondary` ratio
+information. Channels with invalid ratio information are not converted (with a warning).
+
 More information can be accessed through `Comtrade.cfg` object, which stores data such as detailed channel information.
 
 Data of additional sections, such as HDR and INF, can be accessed through `hdr` and `inf` properties, respectively.
@@ -107,14 +113,18 @@ Feel free to pull requests implementing one of these unsupported features or fix
 |:------------------------------------------------------|:----:|:-----:|:----:|:----:|:---------------:|
 | CFG file format                                       | x    | x     | x    | x    | x               |
 | DAT file format                                       | x    | x     | x    | x    | x               |
-| HDR file format                                       | x    | x     | x    | x    | no              |
-| INF file format                                       |      | x     | x    | x    | no              |
+| HDR file format                                       | x    | x     | x    | x    | text (1)        |
+| INF file format                                       |      | x     | x    | x    | x (2)           |
 | CFF file format                                       |      |       |      | x    | x               |
 | ASCII data file format                                | x    | x     | x    | x    | x               |
 | Binary data file format                               | x    | x     | x    | x    | x               |
 | Binary32 data file format                             |      |       |      | x    | x               |
 | Float32 data file format                              |      |       |      | x    | x               |
 | Schema for phasor data                                |      |       |      | x    | no              |
+
+(1) HDR files are free text, available as a string in `Comtrade.hdr`.
+(2) INF files are available as a string in `Comtrade.inf` and can be parsed with
+`Comtrade.inf_sections()`. See [INF files](#inf-files).
 
 
 | Features                                              | 1991 | 1999 | 2001 | 2013 | Module Support  |
@@ -130,9 +140,20 @@ Feel free to pull requests implementing one of these unsupported features or fix
 | Nanoseconds scale                                     |      |      | x    | x    | x               |
 
 
-### Unsupported features
+### Nanoseconds timestamps
 
-* Nanoseconds time base within Python's `datetime` objects (such as `start_timestamp` and `trigger_timestamp` properties). It warns the user but doesn't use it, truncating the numbers.
+Python's `datetime` objects don't support nanoseconds, so `start_timestamp` and `trigger_timestamp`
+are truncated to microseconds (with a warning) when the CFG file uses a nanoseconds time base.
+`start_timestamp_ns` and `trigger_timestamp_ns` hold the full resolution timestamps as the integer
+number of nanoseconds since `1970-01-01 00:00:00` (in the time zone of the file timestamps), which
+can be converted to `numpy` or `pandas` types. `trigger_time` uses them.
+
+```python
+import numpy as np
+import pandas as pd
+np.datetime64(rec.trigger_timestamp_ns, "ns")
+pd.Timestamp(rec.trigger_timestamp_ns)
+```
 
 
 ### Additional settings and features
@@ -151,6 +172,45 @@ DAT files (`BINARY`, `BINARY32` and `FLOAT32` formats), which are converted with
 operations.
 
 
+#### Loading a time window
+
+Large records can be partially loaded, with only the samples within a time window, in seconds,
+in the same scale of `Comtrade.time` (`start_time` and `end_time` limits are inclusive and
+both are optional):
+
+```python
+import comtrade
+rec = comtrade.load("my_record.cfg", start_time=0.1, end_time=0.3)
+rec.time[0]          # 0.1 (or the first sample after it)
+rec.total_samples    # number of samples within the window
+```
+
+`Comtrade.time` values keep their scale, i.e., the first sample of the window is not at zero.
+Binary DAT files are memory mapped and the window is found with a binary search, so only the
+window's rows are read. ASCII DAT files are read up to the window end. Samples are expected
+to be in time order.
+
+
+#### Lazy loading of binary files
+
+With `lazy=True`, binary DAT files (`BINARY`, `BINARY32` and `FLOAT32` formats, including CFF
+files) are kept memory mapped and the values of each channel are decoded when first accessed.
+This saves time and memory when only some channels of a record with many channels are used.
+Time values are loaded right away. ASCII DAT files are loaded completely, as usual.
+
+```python
+import comtrade
+with comtrade.load("my_record.cfg", lazy=True) as rec:
+    ia = rec.analog[0]   # decoded here
+    trip = rec.status[3]
+```
+
+`Comtrade.analog` and `Comtrade.status` are then sequences (not lists) of channel values. The DAT
+file stays open until `Comtrade.close()` is called, the `with` block ends, or another record is
+loaded into the object. Channels not accessed before closing can't be read anymore. It can be
+combined with `start_time` and `end_time`.
+
+
 #### Replace missing data with `float('nan')`
 
 Missing analog values are replaced with `float('nan')`. The value used to represent missing data varies with the 
@@ -164,6 +224,63 @@ Comtrade dat format and revision year. These are listed in the table next.
 | 1999, 2013 |  binary  | `0x8000` or `-32768`          |
 |    2013    | binary32 | `0x80000000` or `-2147483648` |
 |    2013    | float32  | minimum negative float value  |
+
+
+#### Time code, local code and time quality (2013 revision)
+
+The 2013 revision CFG files may describe the time zone of the timestamps
+(`time_code`), the time zone of the recording location (`local_code`), the
+quality of the recording device clock (`tmq_code`) and leap second information
+(`leapsec`). These are available through the `Comtrade.cfg` object:
+
+```python
+import comtrade
+rec = comtrade.load("sample_files/sample_ascii.cfg")
+rec.cfg.time_code      # "-5h30", as written in the file ("" if absent)
+rec.cfg.time_offset    # datetime.timedelta(hours=-5, minutes=-30) (None if unknown)
+rec.cfg.local_code     # "-5h30"
+rec.cfg.local_offset   # datetime.timedelta(hours=-5, minutes=-30)
+rec.cfg.tmq_code       # 11 (0xB)
+rec.cfg.leap_second    # 3
+```
+
+`Comtrade.start_timestamp` and `Comtrade.trigger_timestamp` are naive `datetime` objects,
+as written in the file. When the time code is known, `Comtrade.start_timestamp_utc` and
+`Comtrade.trigger_timestamp_utc` return them as timezone-aware `datetime` objects in UTC,
+which is useful to align records from different devices. Otherwise, they return `None`.
+
+The time quality code (IEEE C37.118) is the maximum clock error of the recording device:
+
+| `tmq_code` | Clock error                          |
+|:----------:|:-------------------------------------|
+| 0          | clock locked to an UTC traceable source |
+| 1 to 11    | within 10^(n - 10) s: from 1 ns (1) to 10 s (11, `0xB`) |
+| 12 to 14   | reserved                             |
+| 15 (`0xF`) | clock failure, time not reliable     |
+
+The `leap_second` values are: 0 (no leap second adjustment), 1 (leap second added),
+2 (leap second subtracted), and 3 (the clock source cannot provide leap second information).
+
+
+#### INF files
+
+INF files use an INI-like format with public sections defined by the standard (such as
+`[Public Record_Information]` and `[Public Analog_Channel_#1]`) and vendor-specific private
+sections. `Comtrade.inf_sections()` parses them into a
+[`configparser.ConfigParser`](https://docs.python.org/3/library/configparser.html) object,
+keeping the case of section and key names (it returns `None` if there's no INF data):
+
+```python
+import comtrade
+rec = comtrade.load("my_record.cfg")  # also reads my_record.inf, if it exists
+inf = rec.inf_sections()
+if inf is not None:
+    for section in inf.sections():
+        print(section, dict(inf[section]))
+    print(inf["Public Record_Information"].get("Source"))
+```
+
+Values are strings. Duplicate sections and keys are allowed (the last value prevails).
 
 
 #### File encodings

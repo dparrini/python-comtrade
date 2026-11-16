@@ -1,8 +1,11 @@
 import datetime as dt
 import math
 import os
+import shutil
 import struct
+import tempfile
 import unittest
+import warnings
 from unittest import mock
 import comtrade
 from comtrade import Comtrade
@@ -826,6 +829,498 @@ class TestNumpyArraysReading(unittest.TestCase):
                 self.assertIsInstance(obj.analog[0], comtrade.numpy.ndarray)
                 self.assertIsInstance(obj.status[0], comtrade.numpy.ndarray)
                 self.assertEqual(_channel_values(obj), _channel_values(expected))
+
+
+class TestTimeCodeParsing(unittest.TestCase):
+    """2013 revision time code, time quality and leap second fields."""
+    def test_time_codes(self):
+        cases = {
+            "0": dt.timedelta(0),
+            "+10": dt.timedelta(hours=10),
+            "5": dt.timedelta(hours=5),
+            "-5h30": -dt.timedelta(hours=5, minutes=30),
+            "+5H45": dt.timedelta(hours=5, minutes=45),
+            " -3 ": dt.timedelta(hours=-3),
+        }
+        for code, expected in cases.items():
+            with self.subTest(code=code):
+                self.assertEqual(comtrade._parse_time_code(code), expected)
+
+    def test_not_applicable_time_codes(self):
+        for code in ("", "x", "X"):
+            with self.subTest(code=code):
+                self.assertIsNone(comtrade._parse_time_code(code))
+
+    def test_invalid_time_codes(self):
+        for code in ("24", "5h60", "abc", "5:30"):
+            with self.subTest(code=code):
+                with self.assertWarns(Warning):
+                    self.assertIsNone(comtrade._parse_time_code(code))
+                self.assertIsNone(comtrade._parse_time_code(code, True))
+
+    def test_tmq_codes(self):
+        self.assertEqual(comtrade._parse_tmq_code("0"), 0)
+        self.assertEqual(comtrade._parse_tmq_code("B"), 11)
+        self.assertEqual(comtrade._parse_tmq_code("f"), 15)
+        self.assertIsNone(comtrade._parse_tmq_code(""))
+        with self.assertWarns(Warning):
+            self.assertIsNone(comtrade._parse_tmq_code("G"))
+
+    def test_leap_seconds(self):
+        for value in range(4):
+            self.assertEqual(comtrade._parse_leap_second(str(value)), value)
+        self.assertIsNone(comtrade._parse_leap_second(""))
+        with self.assertWarns(Warning):
+            self.assertIsNone(comtrade._parse_leap_second("4"))
+
+
+class TestTimeCodeReading(unittest.TestCase):
+    """2013 revision time information read from CFG and CFF files."""
+    def test_files(self):
+        for files in (("tests/sample_files/sample_ascii.cfg",),
+                      ("tests/sample_files/sample_ascii.cff",)):
+            with self.subTest(files=files):
+                obj = Comtrade(ignore_warnings=True).load(*files)
+                cfg = obj.cfg
+                offset = -dt.timedelta(hours=5, minutes=30)
+                self.assertEqual(cfg.time_code, "-5h30")
+                self.assertEqual(cfg.local_code, "-5h30")
+                self.assertEqual(cfg.time_offset, offset)
+                self.assertEqual(cfg.local_offset, offset)
+                self.assertEqual(cfg.tmq_code, 0xB)
+                self.assertEqual(cfg.leap_second, 3)
+                # naive timestamps are kept as written in the file
+                self.assertIsNone(obj.start_timestamp.tzinfo)
+                utc = dt.timezone.utc
+                self.assertEqual(obj.start_timestamp_utc,
+                                 dt.datetime(2011, 1, 12, 11, 25, 30, 75011, utc))
+                self.assertEqual(obj.trigger_timestamp_utc,
+                                 dt.datetime(2011, 1, 12, 11, 25, 30, 78261, utc))
+                self.assertEqual(obj.start_timestamp_utc,
+                                 obj.start_timestamp.replace(tzinfo=dt.timezone(offset)))
+
+    def test_older_revision(self):
+        obj = Comtrade(ignore_warnings=True)
+        obj.read(COMTRADE_SAMPLE_1_CFG, COMTRADE_SAMPLE_1_DAT)
+        self.assertEqual(obj.cfg.time_code, "")
+        self.assertEqual(obj.cfg.local_code, "")
+        self.assertIsNone(obj.cfg.time_offset)
+        self.assertIsNone(obj.cfg.tmq_code)
+        self.assertIsNone(obj.cfg.leap_second)
+        self.assertIsNone(obj.start_timestamp_utc)
+        self.assertIsNone(obj.trigger_timestamp_utc)
+
+    def _read_cfg_with_last_lines(self, last_lines: str) -> comtrade.Cfg:
+        with open("tests/sample_files/sample_ascii.cfg", encoding="utf-8") as f:
+            lines = f.read().splitlines()
+        cfg = comtrade.Cfg(ignore_warnings=True)
+        cfg.read("\n".join(lines[:-2]) + "\n" + last_lines)
+        return cfg
+
+    def test_missing_tmq_line(self):
+        cfg = self._read_cfg_with_last_lines("+2,x\n")
+        self.assertEqual(cfg.time_offset, dt.timedelta(hours=2))
+        self.assertIsNone(cfg.local_offset)
+        self.assertIsNone(cfg.tmq_code)
+        self.assertIsNone(cfg.leap_second)
+        self.assertEqual(cfg.start_timestamp_utc,
+                         dt.datetime(2011, 1, 12, 3, 55, 30, 75011, dt.timezone.utc))
+
+    def test_single_time_code(self):
+        cfg = self._read_cfg_with_last_lines("0\n0,0\n")
+        self.assertEqual(cfg.time_offset, dt.timedelta(0))
+        self.assertIsNone(cfg.local_offset)
+        self.assertEqual(cfg.tmq_code, 0)
+        self.assertEqual(cfg.leap_second, 0)
+
+
+INF_SAMPLE = """; Information file sample
+[Public Record_Information]
+Source=SMARTSTATION relay
+Record_Information=FAULT,PHASE-A,TRIP
+Location=12.3 km
+
+[Public Analog_Channel_#1]
+Channel_ID=IA
+Channel_Phase=A
+
+[ABC Corp Private Section]
+Some_Key=a = b
+"""
+
+
+class TestInfSections(unittest.TestCase):
+    """INF file contents parsed into a ConfigParser object."""
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        for ext in ("cfg", "dat"):
+            shutil.copy(f"tests/sample_files/sample_ascii.{ext}",
+                        os.path.join(self.tmp_dir, f"sample.{ext}"))
+        self.cfg_path = os.path.join(self.tmp_dir, "sample.cfg")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp_dir)
+
+    def _write_inf(self, contents: str):
+        with open(os.path.join(self.tmp_dir, "sample.inf"), "w",
+                  encoding="utf-8") as f:
+            f.write(contents)
+
+    def test_sections(self):
+        self._write_inf(INF_SAMPLE)
+        obj = Comtrade(ignore_warnings=True).load(self.cfg_path)
+        self.assertEqual(obj.inf, INF_SAMPLE)
+        inf = obj.inf_sections()
+        self.assertEqual(inf.sections(), ["Public Record_Information",
+                                          "Public Analog_Channel_#1",
+                                          "ABC Corp Private Section"])
+        record = inf["Public Record_Information"]
+        self.assertEqual(record["Source"], "SMARTSTATION relay")
+        self.assertEqual(record["Record_Information"], "FAULT,PHASE-A,TRIP")
+        self.assertEqual(inf["Public Analog_Channel_#1"]["Channel_ID"], "IA")
+        self.assertEqual(inf["ABC Corp Private Section"]["Some_Key"], "a = b")
+
+    def test_duplicates(self):
+        self._write_inf("[Public Record_Information]\nSource=A\nSource=B\n"
+                        "[Public Record_Information]\nLocation=1\n")
+        inf = Comtrade(ignore_warnings=True).load(self.cfg_path).inf_sections()
+        record = inf["Public Record_Information"]
+        self.assertEqual(record["Source"], "B")
+        self.assertEqual(record["Location"], "1")
+
+    def test_no_inf(self):
+        obj = Comtrade(ignore_warnings=True).load(self.cfg_path)
+        self.assertIsNone(obj.inf)
+        self.assertIsNone(obj.inf_sections())
+        cff = Comtrade(ignore_warnings=True).load("tests/sample_files/sample_ascii.cff")
+        self.assertIsNone(cff.inf_sections())
+
+
+COMTRADE_SAMPLE_1991_CFG = """STATION_NAME,EQUIPMENT
+3,2A,1D
+1,IA,A,LINE,A,2,0,0,-32767,32767
+2,VA,A,LINE,kV,1,0,0,-32767,32767
+1,TRIP,1
+60
+1
+1000,2
+01/02/2000,10:30:00.000000
+01/02/2000,10:30:00.001000
+ASCII
+"""
+
+COMTRADE_SAMPLE_RATIO_CFG = """STATION_NAME,EQUIPMENT,1999
+4,4A,0D
+1,IA_P,A,,A,1,0,0,-32767,32767,1000,5,P
+2,IA_S,A,,A,1,0,0,-32767,32767,1000,5,s
+3,VA_S,A,,V,1,0,0,-32767,32767,0,0,S
+4,FREQ,,,Hz,1,0,0,-32767,32767,,,
+60
+1
+1000,2
+01/02/2000,10:30:00.000000
+01/02/2000,10:30:00.001000
+ASCII
+1
+"""
+
+COMTRADE_SAMPLE_RATIO_DAT = "1,0,10,10,10,60\n2,1000,-20,-20,-20,61\n"
+
+
+class TestChannelLines(unittest.TestCase):
+    """Analog and status channel lines of different revisions."""
+    def test_1991_channels(self):
+        obj = Comtrade(ignore_warnings=True)
+        obj.read(COMTRADE_SAMPLE_1991_CFG, "1,0,1,2,1\n2,1000,3,4,0\n")
+        self.assertEqual(obj.rev_year, "1991")
+        status = obj.cfg.status_channels[0]
+        self.assertEqual((status.n, status.name, status.ph, status.ccbm, status.y),
+                         (1, "TRIP", "", "", 1))
+        analog = obj.cfg.analog_channels[0]
+        self.assertEqual((analog.primary, analog.secondary, analog.pors),
+                         (1.0, 1.0, "P"))
+        # without ratio information, values are not scaled
+        self.assertEqual(list(obj.analog_secondary[0]), list(obj.analog[0]))
+
+    def test_missing_normal_state_warning(self):
+        cfg_text = COMTRADE_SAMPLE_1_CFG.replace("Diff Trip A     ,,,0",
+                                                 "Diff Trip A     ,,,")
+        obj = Comtrade()
+        with self.assertWarns(Warning) as context:
+            obj.read(cfg_text, COMTRADE_SAMPLE_1_DAT)
+        self.assertIn("status channel 1", str(context.warning))
+        self.assertEqual(obj.cfg.status_channels[0].y, 0)
+
+    def test_normal_state(self):
+        obj = Comtrade()
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            obj.read(COMTRADE_SAMPLE_1_CFG, COMTRADE_SAMPLE_1_DAT)
+        self.assertEqual(obj.cfg.status_channels[0].y, 0)
+
+
+class TestAnalogScaling(unittest.TestCase):
+    """Analog values in primary and secondary units."""
+    use_numpy_arrays = False
+
+    def setUp(self):
+        self.obj = Comtrade(ignore_warnings=True,
+                            use_numpy_arrays=self.use_numpy_arrays)
+        self.obj.read(COMTRADE_SAMPLE_RATIO_CFG, COMTRADE_SAMPLE_RATIO_DAT)
+
+    def test_primary(self):
+        primary = self.obj.analog_primary
+        self.assertEqual(list(primary[0]), [10, -20])
+        self.assertEqual(list(primary[1]), [2000, -4000])
+        # invalid ratio: unscaled values
+        self.assertEqual(list(primary[2]), [10, -20])
+        self.assertEqual(list(primary[3]), [60, 61])
+
+    def test_secondary(self):
+        secondary = self.obj.analog_secondary
+        for value, expected in zip(secondary[0], [0.05, -0.1]):
+            self.assertAlmostEqual(value, expected, places=6)
+        self.assertEqual(list(secondary[1]), [10, -20])
+        self.assertEqual(list(secondary[2]), [10, -20])
+        self.assertEqual(list(secondary[3]), [60, 61])
+
+    def test_array_types(self):
+        for values in self.obj.analog_primary + self.obj.analog_secondary:
+            self.assertIs(type(values), type(self.obj.analog[0]))
+
+    def test_cached(self):
+        self.assertIs(self.obj.analog_primary, self.obj.analog_primary)
+        self.obj.read(COMTRADE_SAMPLE_1_CFG, COMTRADE_SAMPLE_1_DAT)
+        self.assertEqual(len(self.obj.analog_primary), 1)
+
+    def test_invalid_ratio_warning(self):
+        obj = Comtrade()
+        obj.read(COMTRADE_SAMPLE_RATIO_CFG, COMTRADE_SAMPLE_RATIO_DAT)
+        with self.assertWarns(Warning) as context:
+            obj.analog_primary
+        self.assertIn("analog channel 3", str(context.warning))
+
+
+@unittest.skipUnless(comtrade._HAS_NUMPY, "numpy is not installed")
+class TestAnalogScalingNumpy(TestAnalogScaling):
+    use_numpy_arrays = True
+
+
+class TestNanosecondTimestamps(unittest.TestCase):
+    """Timestamps with nanoseconds resolution."""
+    def test_time_without_fraction(self):
+        self.assertEqual(comtrade._get_time("10:30:00"), (10, 30, 0, 0, False))
+
+    def test_invalid_time(self):
+        with self.assertWarns(Warning):
+            self.assertEqual(comtrade._get_time("abc"), (0, 0, 0, 0, False))
+
+    def test_extra_digits(self):
+        hour, minute, second, nanosecond, in_nanoseconds = \
+            comtrade._parse_time("00:00:01.123456789123", True)
+        self.assertEqual((second, nanosecond, in_nanoseconds), (1, 123456789, True))
+
+    def test_nanoseconds_warning(self):
+        with self.assertWarns(Warning):
+            comtrade._read_timestamp("01/01/2019,00:00:00.000000001", "2013")
+
+    def test_timestamps_ns(self):
+        cfg_text = COMTRADE_SAMPLE_3_CFG.format(samples=2, seconds=0.000001500,
+                                                format="ASCII")
+        obj = Comtrade(ignore_warnings=True)
+        obj.read(cfg_text, "1,0,1,0\n2,1,2,1\n")
+        self.assertEqual(obj.time_base, obj.cfg.TIME_BASE_NANO_SEC)
+        start_ns = (dt.datetime(2019, 1, 1) - dt.datetime(1970, 1, 1)) \
+            // dt.timedelta(microseconds=1) * 1000
+        self.assertEqual(obj.start_timestamp_ns, start_ns)
+        self.assertEqual(obj.trigger_timestamp_ns, start_ns + 1500)
+        # datetime objects are truncated
+        self.assertEqual(obj.trigger_timestamp.microsecond, 1)
+        self.assertAlmostEqual(obj.trigger_time, 1.5E-6, places=15)
+
+    def test_microseconds_timestamps_ns(self):
+        obj = Comtrade(ignore_warnings=True)
+        obj.read(COMTRADE_SAMPLE_1_CFG, COMTRADE_SAMPLE_1_DAT)
+        self.assertEqual(obj.trigger_timestamp_ns - obj.start_timestamp_ns,
+                         494000000)
+        self.assertAlmostEqual(obj.trigger_time, 0.494)
+
+    @unittest.skipUnless(comtrade._HAS_NUMPY, "numpy is not installed")
+    def test_numpy_datetime64(self):
+        cfg_text = COMTRADE_SAMPLE_3_CFG.format(samples=2, seconds=0.000001500,
+                                                format="ASCII")
+        obj = Comtrade(ignore_warnings=True)
+        obj.read(cfg_text, "1,0,1,0\n2,1,2,1\n")
+        value = comtrade.numpy.datetime64(obj.trigger_timestamp_ns, "ns")
+        self.assertEqual(str(value), "2019-01-01T00:00:00.000001500")
+
+
+PARTIAL_LOADING_FILES = (
+    ("tests/sample_files/sample_ascii.cfg",),
+    ("tests/sample_files/sample_bin.cfg",),
+    ("tests/sample_files/sample_ascii.cff",),
+    ("tests/sample_files/sample_float32.cff",),
+)
+
+
+class TestTimeWindowLoading(unittest.TestCase):
+    """Loading only the samples within a time window."""
+    use_numpy_arrays = False
+
+    def load(self, *files, **kwargs):
+        return Comtrade(ignore_warnings=True,
+                        use_numpy_arrays=self.use_numpy_arrays).load(*files, **kwargs)
+
+    def assertWindow(self, obj, full, first: int, last: int):
+        self.assertEqual(obj.total_samples, last - first)
+        self.assertEqual(list(obj.time), list(full.time[first:last]))
+        self.assertEqual(_channel_values(obj),
+                         [values[first:last] for values in _channel_values(full)])
+
+    def test_window(self):
+        for files in PARTIAL_LOADING_FILES:
+            with self.subTest(files=files):
+                full = self.load(*files)
+                n = full.total_samples
+                first, last = n // 4, n // 2
+                obj = self.load(*files, start_time=full.time[first],
+                                end_time=full.time[last])
+                self.assertWindow(obj, full, first, last + 1)
+
+    def test_start_or_end_only(self):
+        for files in PARTIAL_LOADING_FILES:
+            with self.subTest(files=files):
+                full = self.load(*files)
+                n = full.total_samples
+                obj = self.load(*files, start_time=full.time[n // 2])
+                self.assertWindow(obj, full, n // 2, n)
+                obj = self.load(*files, end_time=full.time[n // 3])
+                self.assertWindow(obj, full, 0, n // 3 + 1)
+
+    def test_between_samples(self):
+        full = self.load("tests/sample_files/sample_bin.cfg")
+        t = list(full.time)
+        obj = self.load("tests/sample_files/sample_bin.cfg",
+                        start_time=(t[0] + t[1]) / 2, end_time=(t[2] + t[3]) / 2)
+        self.assertWindow(obj, full, 1, 3)
+
+    def test_empty_window(self):
+        for files in PARTIAL_LOADING_FILES:
+            with self.subTest(files=files):
+                obj = self.load(*files, start_time=1000.0)
+                self.assertEqual(obj.total_samples, 0)
+                self.assertEqual(len(obj.time), 0)
+                self.assertTrue(all(len(values) == 0
+                                    for values in _channel_values(obj)))
+
+    def test_read_window(self):
+        # Comtrade.read with multiple sample rates: 1000 Hz up to sample 4,
+        # then 500 Hz
+        for dat_format in ("ASCII", "BINARY"):
+            with self.subTest(format=dat_format):
+                rows = [(n, 0, n % 2) for n in range(1, 7)]
+                if dat_format == "ASCII":
+                    dat = "".join("{0},{1},{0},{2}\n".format(*row) for row in rows)
+                else:
+                    dat = b"".join(struct.pack("<IIhH", n, ts, n, status)
+                                   for n, ts, status in rows)
+                obj = Comtrade(ignore_warnings=True,
+                               use_numpy_arrays=self.use_numpy_arrays)
+                obj.read(COMTRADE_SAMPLE_5_CFG.format(format=dat_format), dat,
+                         start_time=0.0025, end_time=0.006)
+                self.assertEqual(list(obj.analog[0]), [4, 5])
+                self.assertEqual(list(obj.status[0]), [0, 1])
+                for t, expected in zip(obj.time, [0.003, 0.005]):
+                    self.assertAlmostEqual(t, expected, places=6)
+
+
+@unittest.skipUnless(comtrade._HAS_NUMPY, "numpy is not installed")
+class TestTimeWindowLoadingNumpy(TestTimeWindowLoading):
+    use_numpy_arrays = True
+
+
+class TestLazyLoading(unittest.TestCase):
+    """Binary DAT files values decoded when first accessed."""
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        for ext in ("cfg", "dat"):
+            shutil.copy(f"tests/sample_files/sample_bin.{ext}",
+                        os.path.join(self.tmp_dir, f"sample.{ext}"))
+        self.cfg_path = os.path.join(self.tmp_dir, "sample.cfg")
+        self.full = Comtrade(ignore_warnings=True).load(self.cfg_path)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp_dir)
+
+    def test_values(self):
+        with Comtrade(ignore_warnings=True).load(self.cfg_path, lazy=True) as obj:
+            self.assertEqual(len(obj.analog), self.full.analog_count)
+            self.assertEqual(list(obj.time), list(self.full.time))
+            self.assertEqual(_channel_values(obj), _channel_values(self.full))
+
+    def test_decoded_when_accessed(self):
+        with Comtrade(ignore_warnings=True).load(self.cfg_path, lazy=True) as obj:
+            count = len(obj.analog)
+
+            def decoded():
+                return [values is not None for values in obj.analog._values]
+
+            self.assertEqual(decoded(), [False] * count)
+            values = obj.analog[1]
+            self.assertIs(obj.analog[1], values)
+            self.assertEqual(decoded(), [i == 1 for i in range(count)])
+            self.assertIs(obj.analog[-1], obj.analog[count - 1])
+            self.assertEqual(decoded(), [i in (1, count - 1) for i in range(count)])
+            self.assertEqual(list(values), list(self.full.analog[1]))
+
+    def test_slices(self):
+        with Comtrade(ignore_warnings=True).load(self.cfg_path, lazy=True) as obj:
+            self.assertEqual([list(v) for v in obj.status[1:3]],
+                             [list(v) for v in self.full.status[1:3]])
+
+    def test_closed(self):
+        obj = Comtrade(ignore_warnings=True).load(self.cfg_path, lazy=True)
+        first = list(obj.analog[0])
+        obj.close()
+        # values decoded before closing are kept
+        self.assertEqual(list(obj.analog[0]), first)
+        with self.assertRaises(comtrade.ComtradeError):
+            obj.analog[1]
+        # the file is released
+        os.remove(os.path.join(self.tmp_dir, "sample.dat"))
+
+    def test_reload_closes_file(self):
+        obj = Comtrade(ignore_warnings=True).load(self.cfg_path, lazy=True)
+        obj.load("tests/sample_files/sample_ascii.cfg")
+        os.remove(os.path.join(self.tmp_dir, "sample.dat"))
+
+    def test_eager_loading_releases_file(self):
+        Comtrade(ignore_warnings=True).load(self.cfg_path, start_time=0.0)
+        os.remove(os.path.join(self.tmp_dir, "sample.dat"))
+
+    def test_lazy_time_window(self):
+        t = list(self.full.time)
+        with comtrade.load(self.cfg_path, ignore_warnings=True, lazy=True,
+                           start_time=t[1], end_time=t[3]) as obj:
+            self.assertEqual(list(obj.analog[0]), list(self.full.analog[0][1:4]))
+            self.assertEqual(list(obj.status[0]), list(self.full.status[0][1:4]))
+
+    def test_cff(self):
+        full = Comtrade(ignore_warnings=True).load("tests/sample_files/sample_float32.cff")
+        with comtrade.load("tests/sample_files/sample_float32.cff",
+                           ignore_warnings=True, lazy=True) as obj:
+            self.assertIsInstance(obj.analog, comtrade._LazyChannels)
+            self.assertEqual(_channel_values(obj), _channel_values(full))
+
+    def test_ascii_loads_eagerly(self):
+        obj = comtrade.load("tests/sample_files/sample_ascii.cfg",
+                            ignore_warnings=True, lazy=True)
+        self.assertIsInstance(obj.analog, list)
+
+    def test_scaled_values(self):
+        with Comtrade(ignore_warnings=True).load(self.cfg_path, lazy=True) as obj:
+            self.assertEqual([list(v) for v in obj.analog_primary],
+                             [list(v) for v in self.full.analog_primary])
 
 
 if __name__ == "__main__":

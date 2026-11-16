@@ -24,14 +24,19 @@
 __version__ = "0.2.1"
 
 import array
+import bisect
+import collections.abc
+import configparser
 import datetime as dt
 import errno
 import io
 import itertools
 import math
+import mmap
 import operator
 import os
 import re
+import struct
 import sys
 from typing import Union
 import warnings
@@ -63,8 +68,14 @@ _TYPE_BINARY = "BINARY"
 _TYPE_BINARY32 = "BINARY32"
 _TYPE_FLOAT32 = "FLOAT32"
 
+# Reference of integer timestamps (naive, as numpy.datetime64)
+_EPOCH = dt.datetime(1970, 1, 1)
+
 # Special values
 _TIMESTAMP_MISSING = 0xFFFFFFFF
+
+# DAT file loading options (keyword arguments of Comtrade.load and read)
+_DAT_OPTIONS = ("lazy", "start_time", "end_time")
 
 # CFF headers
 _CFF_HEADER_REXP = r"(?i)--- file type: ([a-z]+)(?:\s+([a-z0-9]+)(?:\s*\:\s*([0-9]+))?)? ---$"
@@ -82,10 +93,27 @@ _re_time = re.compile(r"([0-9]{1,2}):([0-9]{2}):([0-9]{1,2})(.([0-9]{1,12}))?")
 # Non-standard revision warning
 _WARNING_UNKNOWN_REVISION = "Unknown standard revision \"{}\""
 # Date time with nanoseconds resolution warning
-_WARNING_DATETIME_NANO = "Unsupported datetime objects with nanoseconds \
-resolution. Using truncated values."
+_WARNING_DATETIME_NANO = "datetime objects don't support nanoseconds \
+resolution, start_timestamp and trigger_timestamp are truncated to \
+microseconds. Use start_timestamp_ns and trigger_timestamp_ns for full \
+resolution."
+# Status channel without normal state
+_WARNING_MISSING_NORMAL_STATE = "Missing normal state (y) of status channel \
+{}. Using 0."
+# Analog channel without valid ratio information
+_WARNING_INVALID_RATIO = "Invalid ratio information of analog channel {} \
+(primary={}, secondary={}, PS=\"{}\"). Values are not scaled."
+# Unrecognized time of a timestamp
+_WARNING_INVALID_TIME = "Invalid time \"{}\". Using 00:00:00."
 # Date time with year 0, month 0 and/or day 0.
 _WARNING_MIN_DATE = "Missing date values. Using minimum values: {}."
+# Invalid 2013 revision time information fields
+_WARNING_INVALID_TIME_CODE = "Invalid time code \"{}\". Ignoring it."
+_WARNING_INVALID_TMQ_CODE = "Invalid time quality code \"{}\". Ignoring it."
+_WARNING_INVALID_LEAP_SECOND = "Invalid leap second indicator \"{}\". Ignoring it."
+
+# IEEE C37.232 time code, such as "-5h30", "+10", or "0"
+_re_time_code = re.compile(r"(?i)^([+-]?)([0-9]{1,2})(?:h([0-9]{1,2}))?$")
 
 
 class ComtradeError(Exception):
@@ -114,14 +142,20 @@ def _copy_values(target, start: int, values):
     target[start:start + len(values)] = values
 
 
-def _unpack_column(data, row_size: int, offset: int, typecode: str) -> array.array:
+def _unpack_column(data, row_size: int, offset: int, typecode: str,
+                   first_row: int = 0, rows: int = -1) -> array.array:
     """Unpack the little-endian field of typecode at the offset (in bytes) of
-    every row of row_size bytes in data."""
+    rows (all whole rows, if negative) of row_size bytes in data, starting at
+    the row first_row."""
+    if rows < 0:
+        rows = len(data) // row_size - first_row
     size = array.array(typecode).itemsize
-    column = bytearray(len(data) // row_size * size)
+    column = bytearray(rows * size)
+    start = first_row * row_size + offset
+    end = (first_row + rows) * row_size
     # gather each byte of the field from all rows at once
     for k in range(size):
-        column[k::size] = data[offset + k::row_size]
+        column[k::size] = data[start + k:end:row_size]
     values = array.array(typecode, column)
     if sys.byteorder == "big":
         values.byteswap()
@@ -145,30 +179,33 @@ def _get_date(date_str: str) -> tuple:
     return 0, 0, 0
 
 
+def _parse_time(time_str: str, ignore_warnings: bool = False) -> tuple:
+    """Return the hour, minute, second, nanosecond and whether the fraction of
+    seconds has nanoseconds resolution (more than 6 digits) of a time string.
+    Digits beyond nanoseconds are ignored."""
+    m = _re_time.match(time_str.strip())
+    if m is None:
+        if not ignore_warnings:
+            warnings.warn(Warning(_WARNING_INVALID_TIME.format(time_str)))
+        return 0, 0, 0, 0, False
+    hour = int(m.group(1))
+    minute = int(m.group(2))
+    second = int(m.group(3))
+    frac_sec_str = m.group(5) or ""
+    in_nanoseconds = len(frac_sec_str) > 6
+    nanosecond = int(fill_with_zeros_to_the_right(frac_sec_str[:9], 9))
+    return hour, minute, second, nanosecond, in_nanoseconds
+
+
 def _get_time(time_str: str, ignore_warnings: bool = False) -> tuple:
-    m = _re_time.match(time_str)
-    if m is not None:
-        hour = int(m.group(1))
-        minute = int(m.group(2))
-        second = int(m.group(3))
-        frac_sec_str = m.group(5)
-        # Pad fraction of seconds with 0s to the right
-        if len(frac_sec_str) <= 6:
-            frac_sec_str = fill_with_zeros_to_the_right(frac_sec_str, 6)
-        else:
-            frac_sec_str = fill_with_zeros_to_the_right(frac_sec_str, 9)
-
-        frac_second = int(frac_sec_str)
-        in_nanoseconds = len(frac_sec_str) > 6
-        microsecond = frac_second
-
-        if in_nanoseconds:
-            # Nanoseconds resolution is not supported by datetime module, so it's
-            # converted to integer below.
-            if not ignore_warnings:
-                warnings.warn(Warning(_WARNING_DATETIME_NANO))
-            microsecond = int(microsecond * 1E-3)
-        return hour, minute, second, microsecond, in_nanoseconds
+    """Return the hour, minute, second, microsecond (truncated) and whether
+    the fraction of seconds has nanoseconds resolution of a time string."""
+    hour, minute, second, nanosecond, in_nanoseconds = _parse_time(
+        time_str, ignore_warnings)
+    if in_nanoseconds and not ignore_warnings:
+        # Nanoseconds resolution is not supported by datetime module
+        warnings.warn(Warning(_WARNING_DATETIME_NANO))
+    return hour, minute, second, nanosecond // 1000, in_nanoseconds
 
 
 def fill_with_zeros_to_the_right(number_str: str, width: int):
@@ -195,11 +232,12 @@ def _get_same_case(original_ext: str, other_ext: str) -> str:
 
 
 def _read_timestamp(timestamp_line: str, rev_year: str, ignore_warnings: bool = False) -> tuple:
-    """Process comma separated fields and returns a tuple containing the timestamp
-    and a boolean value indicating whether nanoseconds are used.
+    """Process comma separated fields and returns a tuple containing the timestamp,
+    a boolean value indicating whether nanoseconds are used, and the nanoseconds
+    truncated from the timestamp (0 to 999).
     Can possibly return the timestamp 00/00/0000 00:00:00.000 for empty strings
     or empty pairs."""
-    day, month, year, hour, minute, second, microsecond = (0,) * 7
+    day, month, year, hour, minute, second, nanosecond = (0,) * 7
     nano_sec = False
     if len(timestamp_line.strip()) > 0:
         values = _read_sep_values(timestamp_line, 2)
@@ -213,8 +251,10 @@ def _read_timestamp(timestamp_line: str, rev_year: str, ignore_warnings: bool = 
                 else:
                     day, month, year = _get_date(date_str)
             if len(time_str.strip()) > 0:
-                hour, minute, second, microsecond, \
-                    nano_sec = _get_time(time_str, ignore_warnings)
+                hour, minute, second, nanosecond, \
+                    nano_sec = _parse_time(time_str, ignore_warnings)
+                if nano_sec and not ignore_warnings:
+                    warnings.warn(Warning(_WARNING_DATETIME_NANO))
 
     using_min_data = False
     if year <= 0:
@@ -229,10 +269,121 @@ def _read_timestamp(timestamp_line: str, rev_year: str, ignore_warnings: bool = 
     # Timezone info unsupported
     tzinfo = None
     timestamp = dt.datetime(year, month, day, hour, minute, second,
-                            microsecond, tzinfo)
+                            nanosecond // 1000, tzinfo)
     if not ignore_warnings and using_min_data:
         warnings.warn(Warning(_WARNING_MIN_DATE.format(str(timestamp))))
-    return timestamp, nano_sec
+    return timestamp, nano_sec, nanosecond % 1000
+
+
+def _timestamp_ns(timestamp: dt.datetime, nanosecond: int) -> int:
+    """Return a naive timestamp, plus nanoseconds, as an integer number of
+    nanoseconds since 1970-01-01 00:00:00 (the same time zone)."""
+    microseconds = (timestamp - _EPOCH) // dt.timedelta(microseconds=1)
+    return microseconds * 1000 + nanosecond
+
+
+def _parse_time_code(time_code: str, ignore_warnings: bool = False) -> Union[dt.timedelta, None]:
+    """Convert an IEEE C37.232 time code (such as "-5h30", "+10" or "0") to the
+    time difference to UTC. Returns None for empty or "x" (not applicable) codes,
+    and for invalid ones (warning the user)."""
+    time_code = time_code.strip()
+    if time_code == "" or time_code.lower() == "x":
+        return None
+    m = _re_time_code.match(time_code)
+    if m is not None:
+        hours = int(m.group(2))
+        minutes = int(m.group(3)) if m.group(3) is not None else 0
+        if hours < 24 and minutes < 60:
+            offset = dt.timedelta(hours=hours, minutes=minutes)
+            return -offset if m.group(1) == "-" else offset
+    if not ignore_warnings:
+        warnings.warn(Warning(_WARNING_INVALID_TIME_CODE.format(time_code)))
+    return None
+
+
+def _parse_tmq_code(tmq_code: str, ignore_warnings: bool = False) -> Union[int, None]:
+    """Convert the time quality code (an hexadecimal digit, IEEE C37.118) to
+    int. Returns None for empty or invalid codes (warning the user)."""
+    tmq_code = tmq_code.strip()
+    if tmq_code == "":
+        return None
+    if len(tmq_code) == 1 and tmq_code in "0123456789abcdefABCDEF":
+        return int(tmq_code, 16)
+    if not ignore_warnings:
+        warnings.warn(Warning(_WARNING_INVALID_TMQ_CODE.format(tmq_code)))
+    return None
+
+
+def _parse_leap_second(leap_second: str, ignore_warnings: bool = False) -> Union[int, None]:
+    """Convert the leap second indicator (0 to 3) to int. Returns None for
+    empty or invalid values (warning the user)."""
+    leap_second = leap_second.strip()
+    if leap_second == "":
+        return None
+    if leap_second in ("0", "1", "2", "3"):
+        return int(leap_second)
+    if not ignore_warnings:
+        warnings.warn(Warning(_WARNING_INVALID_LEAP_SECOND.format(leap_second)))
+    return None
+
+
+def _to_utc(timestamp: dt.datetime, offset: Union[dt.timedelta, None]) -> Union[dt.datetime, None]:
+    """Convert a naive timestamp, in the time zone offset from UTC, to a timezone
+    aware datetime in UTC. Returns None when the offset is unknown."""
+    if offset is None:
+        return None
+    try:
+        return timestamp.replace(tzinfo=dt.timezone(offset)).astimezone(dt.timezone.utc)
+    except OverflowError:
+        # placeholder timestamps (missing dates) near datetime.min
+        return None
+
+
+def _truncate_values(values, size: int):
+    """Return the first size values (array.array or numpy array)."""
+    if len(values) == size:
+        return values
+    return values[:size]
+
+
+class _LazyChannels(collections.abc.Sequence):
+    """Sequence of channel values decoded when first accessed."""
+
+    def __init__(self, count: int, decode):
+        self._decode = decode
+        self._values = [None] * count
+
+    def __len__(self):
+        return len(self._values)
+
+    def __getitem__(self, index):
+        if isinstance(index, slice):
+            return [self[i] for i in range(*index.indices(len(self)))]
+        values = self._values[index]
+        if values is None:
+            index = range(len(self))[index]
+            values = self._decode(index)
+            self._values[index] = values
+        return values
+
+    def __add__(self, other):
+        # concatenation as lists, such as analog + status
+        return list(self) + list(other)
+
+    def __radd__(self, other):
+        return list(other) + list(self)
+
+    def __repr__(self):
+        return "<{} channels, decoded when first accessed>".format(len(self))
+
+
+def _scale_values(values, factor: float):
+    """Return the values (array.array or numpy array) multiplied by factor."""
+    if factor == 1.0:
+        return values
+    if _HAS_NUMPY and isinstance(values, numpy.ndarray):
+        return values * factor
+    return array.array(values.typecode, [v * factor for v in values])
 
 
 def _eof_strip(line: str) -> str:
@@ -280,15 +431,22 @@ class Cfg:
         self._timestamp_critical = False
         self._start_timestamp = dt.datetime(1900, 1, 1)
         self._trigger_timestamp = dt.datetime(1900, 1, 1)
+        # nanoseconds truncated from the timestamps above (0 to 999)
+        self._start_nanosecond = 0
+        self._trigger_nanosecond = 0
         self._ft = _TYPE_ASCII
         self._time_multiplier = 1.0
-        # 2013 standard revision information
-        # time_code,local_code = 0,0 means local time is UTC
-        self._time_code = 0
-        self._local_code = 0
+        # 2013 standard revision information (empty strings or None when
+        # not available)
+        # time_code: time difference to UTC of the file timestamps
+        # local_code: time difference to UTC of the recording location
+        self._time_code = ""
+        self._local_code = ""
+        self._time_offset = None
+        self._local_offset = None
         # tmq_code,leapsec
-        self._tmq_code = 0
-        self._leap_second = 0
+        self._tmq_code = None
+        self._leap_second = None
 
         self._ignore_warnings = kwargs.get("ignore_warnings", False)
 
@@ -374,6 +532,21 @@ class Cfg:
         return self._trigger_timestamp
 
     @property
+    def start_timestamp_ns(self) -> int:
+        """Return the recording start time stamp, with nanoseconds resolution,
+        as the number of nanoseconds since 1970-01-01 00:00:00 (in the time
+        zone of the file timestamps). It can be converted with
+        numpy.datetime64(value, "ns") or pandas.Timestamp(value)."""
+        return _timestamp_ns(self._start_timestamp, self._start_nanosecond)
+
+    @property
+    def trigger_timestamp_ns(self) -> int:
+        """Return the trigger time stamp, with nanoseconds resolution, as the
+        number of nanoseconds since 1970-01-01 00:00:00 (in the time zone of
+        the file timestamps)."""
+        return _timestamp_ns(self._trigger_timestamp, self._trigger_nanosecond)
+
+    @property
     def nrates(self) -> int:
         """Return the number of different sample rates within the DAT file."""
         return self._nrates
@@ -385,6 +558,56 @@ class Cfg:
         sample rate.
         """
         return self._sample_rates
+
+    @property
+    def time_code(self) -> str:
+        """Return the time code (IEEE C37.232) of the file timestamps, such as
+        "-5h30", as written in the CFG file (2013 revision). Empty if absent."""
+        return self._time_code
+
+    @property
+    def local_code(self) -> str:
+        """Return the time code (IEEE C37.232) of the recording location's
+        local time, such as "-5h30", as written in the CFG file (2013 revision).
+        Empty if absent."""
+        return self._local_code
+
+    @property
+    def time_offset(self) -> Union[dt.timedelta, None]:
+        """Return the time difference to UTC of the file timestamps (from
+        time_code), or None if unknown."""
+        return self._time_offset
+
+    @property
+    def local_offset(self) -> Union[dt.timedelta, None]:
+        """Return the time difference to UTC of the recording location's local
+        time (from local_code), or None if unknown."""
+        return self._local_offset
+
+    @property
+    def tmq_code(self) -> Union[int, None]:
+        """Return the time quality code (IEEE C37.118) of the recording device
+        clock, from 0 (locked) to 15 (clock failure), or None if absent."""
+        return self._tmq_code
+
+    @property
+    def leap_second(self) -> Union[int, None]:
+        """Return the leap second indicator: 0 (no leap second), 1 (added),
+        2 (subtracted), 3 (clock source unable to provide leap second
+        information), or None if absent."""
+        return self._leap_second
+
+    @property
+    def start_timestamp_utc(self) -> Union[dt.datetime, None]:
+        """Return the recording start time stamp as a timezone aware datetime
+        in UTC, or None if the time code is unknown."""
+        return _to_utc(self._start_timestamp, self._time_offset)
+
+    @property
+    def trigger_timestamp_utc(self) -> Union[dt.datetime, None]:
+        """Return the trigger time stamp as a timezone aware datetime in UTC,
+        or None if the time code is unknown."""
+        return _to_utc(self._trigger_timestamp, self._time_offset)
 
     # Deprecated properties - Changed "Digital" for "Status"
     @property
@@ -431,6 +654,12 @@ class Cfg:
         self._sample_rates = []
         self._analog_channels = []
         self._status_channels = []
+        self._time_code = ""
+        self._local_code = ""
+        self._time_offset = None
+        self._local_offset = None
+        self._tmq_code = None
+        self._leap_second = None
 
         # First line
         line = cfg.readline()
@@ -464,10 +693,12 @@ class Cfg:
         # Analog channel description lines
         for ichn in range(self._analog_count):
             line = cfg.readline()
-            packed = _read_sep_values(line, 13, '0')
+            packed = _read_sep_values(line, 10, '0')
             # unpack values
-            n, name, ph, ccbm, uu, a, b, skew, cmin, cmax, \
-                primary, secondary, pors = packed
+            n, name, ph, ccbm, uu, a, b, skew, cmin, cmax = packed[:10]
+            # primary, secondary and PS fields (1999 revision and later)
+            primary, secondary, pors = \
+                (list(_read_sep_values(line)) + [''] * 3)[10:13]
             # type conversion
             n = int(n)
             a = float(a)
@@ -475,8 +706,9 @@ class Cfg:
             skew = _prevent_null(skew, float, 0.0)
             cmin = float(cmin)
             cmax = float(cmax)
-            primary = float(primary)
-            secondary = float(secondary)
+            primary = _prevent_null(primary, float, 1.0)
+            secondary = _prevent_null(secondary, float, 1.0)
+            pors = pors if pors else 'P'
             self.analog_channels[ichn] = AnalogChannel(n, a, b, skew,
                                                        cmin, cmax, name, uu, ph, ccbm, primary, secondary, pors)
             line_count = line_count + 1
@@ -485,11 +717,18 @@ class Cfg:
         for ichn in range(self._status_count):
             line = cfg.readline()
             # unpack values
-            packed = _read_sep_values(line, 5, '0')
-            n, name, ph, ccbm, y = packed
+            values = _read_sep_values(line)
+            if len(values) == 3:
+                # 1991 revision: n,ch_id,y
+                n, name, y = values
+                ph, ccbm = '', ''
+            else:
+                n, name, ph, ccbm, y = _read_sep_values(line, 5, '')
             # type conversion
             n = int(n)
-            y = _prevent_null(y, int, 0)  # TODO: actually a critical data. In the future add a warning.
+            if len(y) == 0 and not self._ignore_warnings:
+                warnings.warn(Warning(_WARNING_MISSING_NORMAL_STATE.format(n)))
+            y = _prevent_null(y, int, 0)
             self.status_channels[ichn] = StatusChannel(n, name, ph, ccbm, y)
             line_count = line_count + 1
 
@@ -522,7 +761,7 @@ class Cfg:
         # First data point time and time base
         line = cfg.readline()
         ts_str = line.strip()
-        self._start_timestamp, nanosec = _read_timestamp(
+        self._start_timestamp, nanosec, self._start_nanosecond = _read_timestamp(
             ts_str,
             self.rev_year,
             self._ignore_warnings
@@ -533,7 +772,7 @@ class Cfg:
         # Event data point and time base
         line = cfg.readline()
         ts_str = line.strip()
-        self._trigger_timestamp, nanosec = _read_timestamp(
+        self._trigger_timestamp, nanosec, self._trigger_nanosecond = _read_timestamp(
             ts_str,
             self.rev_year,
             self._ignore_warnings
@@ -560,12 +799,21 @@ class Cfg:
             line = _eof_strip(cfg.readline())
 
             if line:
-                self._time_code, self._local_code = _read_sep_values(line)
+                self._time_code, self._local_code = _read_sep_values(line, 2)
+                self._time_offset = _parse_time_code(self._time_code,
+                                                     self._ignore_warnings)
+                self._local_offset = _parse_time_code(self._local_code,
+                                                      self._ignore_warnings)
                 line_count = line_count + 1
 
                 line = _eof_strip(cfg.readline())
-                # time_code and local_code
-                self._tmq_code, self._leap_second = _read_sep_values(line)
+                # tmq_code and leapsec
+                if line:
+                    tmq_code, leap_second = _read_sep_values(line, 2)
+                    self._tmq_code = _parse_tmq_code(tmq_code,
+                                                     self._ignore_warnings)
+                    self._leap_second = _parse_leap_second(leap_second,
+                                                           self._ignore_warnings)
 
     def _get_time_base(self, using_nanoseconds: bool):
         """
@@ -622,15 +870,34 @@ class Comtrade:
         # time values of each analog channel, with the channel time skew
         # (computed when first accessed)
         self._analog_time_values = None
+        # analog values in primary and secondary units (computed when first
+        # accessed)
+        self._analog_scaled_values = {}
 
         # Additional CFF data (or additional comtrade files)
         self._hdr = None
         self._inf = None
 
+        # DAT reader of lazy loaded data
+        self._dat_reader = None
+
         if "ignore_warnings" in kwargs:
             self.ignore_warnings = kwargs["ignore_warnings"]
         else:
             self.ignore_warnings = False
+
+    def close(self) -> None:
+        """Close the DAT file of lazy loaded data. Channels not accessed
+        before closing can't be read anymore."""
+        if self._dat_reader is not None:
+            self._dat_reader.close()
+            self._dat_reader = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.close()
 
     @property
     def station_name(self) -> str:
@@ -661,6 +928,28 @@ class Comtrade:
     def inf(self):
         """Return the INF file contents."""
         return self._inf
+
+    def inf_sections(self) -> Union[configparser.ConfigParser, None]:
+        """Parse the INF file contents (1999 revision and later) and return
+        them as a configparser.ConfigParser object, or None if there is no
+        INF data.
+
+        Section and key names keep their original case, such as
+        "Public Record_Information". Values are strings. Duplicate sections
+        and keys are allowed, the last value prevails. Raises
+        configparser.Error if the contents are not in the INF (INI) format.
+        """
+        if not self._inf:
+            return None
+        parser = configparser.ConfigParser(
+            delimiters=("=",),
+            comment_prefixes=(";",),
+            strict=False,
+            interpolation=None,
+        )
+        parser.optionxform = str
+        parser.read_string(self._inf)
+        return parser
 
     @property
     def analog_channel_ids(self) -> list:
@@ -697,6 +986,43 @@ class Comtrade:
         return self._analog_time_values
 
     @property
+    def analog_primary(self) -> list:
+        """Return the analog channel values in primary units (such as the
+        power system voltages and currents), using each channel's primary
+        and secondary ratio information."""
+        return self._get_analog_scaled("P")
+
+    @property
+    def analog_secondary(self) -> list:
+        """Return the analog channel values in secondary units (such as the
+        VT and CT outputs), using each channel's primary and secondary ratio
+        information."""
+        return self._get_analog_scaled("S")
+
+    def _get_analog_scaled(self, side: str) -> list:
+        if side not in self._analog_scaled_values:
+            self._analog_scaled_values[side] = [
+                _scale_values(values, self._get_ratio_factor(channel, side))
+                for channel, values in zip(self._cfg.analog_channels,
+                                           self._analog_values)]
+        return self._analog_scaled_values[side]
+
+    def _get_ratio_factor(self, channel, side: str) -> float:
+        """Return the factor to convert the channel values to the side ("P"
+        or "S") units."""
+        pors = channel.pors.strip().upper()
+        if pors == side:
+            return 1.0
+        if pors in ("P", "S") and channel.primary > 0 and channel.secondary > 0:
+            if side == "P":
+                return channel.primary / channel.secondary
+            return channel.secondary / channel.primary
+        if not self.ignore_warnings:
+            warnings.warn(Warning(_WARNING_INVALID_RATIO.format(
+                channel.n, channel.primary, channel.secondary, channel.pors)))
+        return 1.0
+
+    @property
     def analog(self) -> list:
         """Return the analog channel values bidimensional list."""
         return self._analog_values
@@ -727,6 +1053,18 @@ class Comtrade:
         return self._cfg.trigger_timestamp
 
     @property
+    def start_timestamp_utc(self):
+        """Return the recording start time stamp as a timezone aware datetime
+        in UTC, or None if the time code is unknown (2013 revision)."""
+        return self._cfg.start_timestamp_utc
+
+    @property
+    def trigger_timestamp_utc(self):
+        """Return the trigger time stamp as a timezone aware datetime in UTC,
+        or None if the time code is unknown (2013 revision)."""
+        return self._cfg.trigger_timestamp_utc
+
+    @property
     def channels_count(self) -> int:
         """Return the number of channels, total."""
         return self._cfg.channels_count
@@ -742,13 +1080,21 @@ class Comtrade:
         return self._cfg.status_count
 
     @property
+    def start_timestamp_ns(self) -> int:
+        """Return the recording start time stamp, with nanoseconds resolution,
+        as the number of nanoseconds since 1970-01-01 00:00:00."""
+        return self._cfg.start_timestamp_ns
+
+    @property
+    def trigger_timestamp_ns(self) -> int:
+        """Return the trigger time stamp, with nanoseconds resolution, as the
+        number of nanoseconds since 1970-01-01 00:00:00."""
+        return self._cfg.trigger_timestamp_ns
+
+    @property
     def trigger_time(self) -> float:
         """Return relative trigger time in seconds."""
-        stt = self._cfg.start_timestamp
-        trg = self._cfg.trigger_timestamp
-        tdiff = trg - stt
-        tsec = (tdiff.days * 60 * 60 * 24) + tdiff.seconds + (tdiff.microseconds * 1E-6)
-        return tsec
+        return (self._cfg.trigger_timestamp_ns - self._cfg.start_timestamp_ns) * 1E-9
 
     @property
     def time_base(self) -> float:
@@ -782,12 +1128,14 @@ class Comtrade:
             warnings.warn(FutureWarning("digital_count is deprecated, use status_count instead."))
         return self._cfg.status_count
 
-    def _get_dat_reader(self):
+    def _get_dat_reader(self, **kwargs):
         # case-insensitive comparison of file format
         ft_upper = self.ft.upper()
         dat_kwargs = {"use_numpy_arrays": self._use_numpy_arrays,
                       "use_double_precision": self._use_double_precision,
                       "rev_year": self.rev_year}
+        dat_kwargs.update({key: kwargs[key] for key in _DAT_OPTIONS
+                           if key in kwargs})
         if ft_upper == _TYPE_ASCII:
             dat = _AsciiDatReader(**dat_kwargs)
         elif ft_upper == _TYPE_BINARY:
@@ -800,9 +1148,12 @@ class Comtrade:
             raise ComtradeError("Not supported data file format: {}".format(self.ft))
         return dat
 
-    def read(self, cfg_lines, dat_lines_or_bytes) -> None:
+    def read(self, cfg_lines, dat_lines_or_bytes, **kwargs) -> None:
         """
         Read CFG and DAT files contents. Expects FileIO or StringIO objects.
+
+        Keyword arguments:
+        lazy, start_time, end_time -- DAT loading options, see load().
         """
         self._cfg.read(cfg_lines)
 
@@ -812,7 +1163,7 @@ class Comtrade:
         # channel phases
         self._cfg_extract_phases(self._cfg)
 
-        dat = self._get_dat_reader()
+        dat = self._get_dat_reader(**kwargs)
         dat.read(dat_lines_or_bytes, self._cfg)
 
         # copy .dat object information
@@ -832,6 +1183,11 @@ class Comtrade:
         self._status_values = dat.status
         self._total_samples = dat.total_samples
         self._analog_time_values = None
+        self._analog_scaled_values = {}
+        # keep the reader of lazy loaded data, to close its file
+        self.close()
+        if dat.is_lazy:
+            self._dat_reader = dat
 
     def _get_skewed_time(self, skew: float):
         """Return the time values shifted by a channel time skew (in microseconds)."""
@@ -871,16 +1227,25 @@ class Comtrade:
         Keyword arguments:
         inf_file -- optional INF file path (Default = None)
         hdr_file -- optional HDR file path (Default = None)
+        start_time -- load only samples at or after this time, in seconds,
+            in the same scale of the time property (Default = None)
+        end_time -- load only samples at or before this time, in seconds
+            (Default = None)
+        lazy -- for binary DAT files, keep the file memory mapped and decode
+            each channel's values when first accessed. Call close(), or use
+            the object as a context manager, to close the file
+            (Default = False)
         """
         inf_file = kwargs.get("inf_file", None)
         hdr_file = kwargs.get("hdr_file", None)
+        dat_options = {key: kwargs[key] for key in _DAT_OPTIONS if key in kwargs}
 
         # which extension: CFG or CFF?
         file_ext = cfg_file[-3:]
         file_ext_upper = file_ext.upper()
         if file_ext_upper == "CFF":
             # check if the CFF file exists
-            self._load_cff(cfg_file)
+            self._load_cff(cfg_file, **dat_options)
 
         elif file_ext_upper == "CFG":
             basename = cfg_file[:-3]
@@ -899,7 +1264,7 @@ class Comtrade:
             if "encoding" in kwargs:
                 file_kwargs["encoding"] = kwargs["encoding"]
             self._load_cfg(cfg_file, **file_kwargs)
-            self._load_dat(dat_file)
+            self._load_dat(dat_file, **dat_options)
 
             # Load additional inf and hdr files, if they exist.
             self._load_inf(inf_file, **file_kwargs)
@@ -919,8 +1284,8 @@ class Comtrade:
         # channel phases
         self._cfg_extract_phases(self._cfg)
 
-    def _load_dat(self, dat_filepath):
-        dat = self._get_dat_reader()
+    def _load_dat(self, dat_filepath, **kwargs):
+        dat = self._get_dat_reader(**kwargs)
         dat.load(dat_filepath, self._cfg)
 
         # copy .dat object information
@@ -1002,11 +1367,11 @@ class Comtrade:
 
             if fformat == _TYPE_ASCII:
                 # process ASCII CFF data
-                self.read("\n".join(cfg_lines), "\n".join(dat_lines))
+                self.read("\n".join(cfg_lines), "\n".join(dat_lines), **kwargs)
             else:
                 # read remaining data as .dat values.
                 dat_bytes = cff_file.read()
-                self.read("\n".join(cfg_lines), dat_bytes)
+                self.read("\n".join(cfg_lines), dat_bytes, **kwargs)
 
         # stores additional data
         self._hdr = "\n".join(hdr_lines)
@@ -1099,12 +1464,20 @@ class AnalogChannel(Channel):
 class _DatReader:
     """Abstract DatReader class. Used to parse DAT file contents."""
     read_mode = "r"
+    # whether the values are allocated before parsing, for all samples
+    preallocate_values = True
 
     def __init__(self, **kwargs):
         """DatReader class constructor."""
         self._use_numpy_arrays = kwargs.get("use_numpy_arrays", False)
         self._use_double_precision = kwargs.get("use_double_precision", False)
         self._rev_year = kwargs.get("rev_year", REV_2013)
+        # loading options
+        self._lazy = kwargs.get("lazy", False)
+        self._start_time = kwargs.get("start_time", None)
+        self._end_time = kwargs.get("end_time", None)
+        # memory mapped DAT file
+        self._mmap = None
 
         self.file_path = ""
         self._content = None
@@ -1126,6 +1499,31 @@ class _DatReader:
         """Return the total samples (per channel)."""
         return self._total_samples
 
+    @property
+    def is_lazy(self) -> bool:
+        """Return whether channel values are decoded when first accessed."""
+        return False
+
+    @property
+    def _has_time_window(self) -> bool:
+        return self._start_time is not None or self._end_time is not None
+
+    def _in_time_window(self, time: float) -> bool:
+        return (self._start_time is None or time >= self._start_time) and \
+            (self._end_time is None or time <= self._end_time)
+
+    def _as_stored_times(self, times: list) -> list:
+        """Return the times rounded to the precision of the time values, so
+        that time window limits taken from them select the same samples."""
+        return list(array.array("d" if self._use_double_precision else "f",
+                                times))
+
+    def close(self):
+        """Close the memory mapped DAT file, if any."""
+        if self._mmap is not None:
+            self._mmap.close()
+            self._mmap = None
+
     def load(self, dat_filepath, cfg, **kwargs):
         """Load a DAT file and parse its contents."""
         self.file_path = dat_filepath
@@ -1134,10 +1532,25 @@ class _DatReader:
             # extract CFG file information regarding data dimensions
             self._cfg = cfg
             self._preallocate()
-            if "encoding" not in kwargs and self.read_mode != "rb":
-                kwargs["encoding"] = "utf-8"
-            with open(self.file_path, self.read_mode, **kwargs) as contents:
-                self.parse(contents)
+            if self.read_mode == "rb":
+                # binary files are memory mapped, so only the needed rows
+                # and fields are read
+                with open(self.file_path, "rb") as file:
+                    if os.fstat(file.fileno()).st_size > 0:
+                        self._mmap = mmap.mmap(file.fileno(), 0,
+                                               access=mmap.ACCESS_READ)
+                try:
+                    self.parse(self._mmap if self._mmap is not None else b"")
+                except BaseException:
+                    self.close()
+                    raise
+                if not self.is_lazy:
+                    self.close()
+            else:
+                if "encoding" not in kwargs:
+                    kwargs["encoding"] = "utf-8"
+                with open(self.file_path, self.read_mode, **kwargs) as contents:
+                    self.parse(contents)
         else:
             raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT),
                                     self.file_path)
@@ -1167,6 +1580,9 @@ class _DatReader:
             if samp != 0.0:
                 start_time += (endsamp - start_n) / samp
             start_n = endsamp
+
+        if not self.preallocate_values:
+            return
 
         # analog and status count
         analog_count = self._cfg.analog_count
@@ -1264,21 +1680,33 @@ class _AsciiDatReader(_DatReader):
         # Lines are read in blocks and the values of each channel in a block
         # are converted at once, which is much faster than one by one.
         block_size = max(1, _ASCII_BLOCK_VALUES // (analog_count + status_count + 2))
+        # rows read and rows stored (only the ones within the time window)
+        rows_read = 0
         irow = 0
-        while irow < self._total_samples:
+        past_window = False
+        while rows_read < self._total_samples and not past_window:
             rows = [line.strip().split(self.ASCII_SEPARATOR) for line in
-                    itertools.islice(lines, min(block_size, self._total_samples - irow))]
+                    itertools.islice(lines, min(block_size, self._total_samples - rows_read))]
             if not rows:
                 break
+            rows_read += len(rows)
 
             # Read time. A missing timestamp is a blank field in ASCII files:
             # 0xFFFFFFFF is the missing marker of binary files only, and a
             # valid decimal timestamp here.
-            _copy_values(self.time, irow, [
-                self._get_time(int(values[0]),
-                               float(values[1]) if values[1].strip() else None,
-                               time_base, time_mult)
-                for values in rows])
+            times = [self._get_time(int(values[0]),
+                                    float(values[1]) if values[1].strip() else None,
+                                    time_base, time_mult)
+                     for values in rows]
+            if self._has_time_window:
+                # samples are in time order: stop after the window end
+                past_window = self._end_time is not None and \
+                    times[-1] > self._end_time
+                times = self._as_stored_times(times)
+                selected = [k for k, t in enumerate(times) if self._in_time_window(t)]
+                rows = [rows[k] for k in selected]
+                times = [times[k] for k in selected]
+            _copy_values(self.time, irow, times)
 
             for i in range(analog_count):
                 ai, bi = a[i], b[i]
@@ -1292,6 +1720,13 @@ class _AsciiDatReader(_DatReader):
                              list(map(int, map(operator.itemgetter(i - status_count), rows))))
 
             irow += len(rows)
+
+        if self._has_time_window:
+            # keep only the samples within the time window
+            self._total_samples = irow
+            self.time = _truncate_values(self.time, irow)
+            self.analog = [_truncate_values(values, irow) for values in self.analog]
+            self.status = [_truncate_values(values, irow) for values in self.status]
 
 
 class _BinaryDatReader(_DatReader):
@@ -1315,6 +1750,8 @@ class _BinaryDatReader(_DatReader):
             self.DATA_MISSING = -32768  # 0x8000
 
         self.read_mode = "rb"
+        # values are allocated when parsed, only for the samples loaded
+        self.preallocate_values = False
 
     def _get_analog_values(self, yint, a: float, b: float):
         """Return the analog values a * yint + b of the raw values yint,
@@ -1335,19 +1772,24 @@ class _BinaryDatReader(_DatReader):
             return (numpy.asarray(group) >> chnindex) & 1
         return [(word >> chnindex) & 1 for word in group]
 
+    @property
+    def is_lazy(self) -> bool:
+        return self._lazy
+
+    def close(self):
+        """Close the DAT file contents. Channel values not decoded yet can't
+        be read anymore."""
+        self._contents = None
+        super().close()
+
     def parse(self, contents):
         """Parse DAT binary file contents."""
         time_mult = self._cfg.timemult
         time_base = self._cfg.time_base
         achannels = self._cfg.analog_count
-        schannel = self._cfg.status_count
+        schannels = self._cfg.status_count
 
-        # auxillary vectors (channels gains and offsets)
-        a = [x.a for x in self._cfg.analog_channels]
-        b = [x.b for x in self._cfg.analog_channels]
-
-        dbytes = self.STATUS_BYTES * math.ceil(schannel / 16.0)
-        groups_of_16bits = math.floor(dbytes / self.STATUS_BYTES)
+        dbytes = self.STATUS_BYTES * math.ceil(schannels / 16.0)
 
         if isinstance(contents, io.TextIOBase) or \
                 isinstance(contents, io.BufferedIOBase):
@@ -1360,40 +1802,92 @@ class _BinaryDatReader(_DatReader):
         row_size = self.SAMPLE_NUMBER_BYTES + self.TIME_BYTES + \
             achannels * self.ANALOG_BYTES + dbytes
         rows = min(len(contents) // row_size, self.total_samples)
-        contents = contents[:rows * row_size]
+
+        def get_time(n: int, ts_val: int) -> float:
+            # 0xFFFFFFFF marks a missing timestamp in binary files
+            return self._get_time(n, ts_val if ts_val != _TIMESTAMP_MISSING else None,
+                                  time_base, time_mult)
+
+        # rows to decode: the ones within the time window, or all of them
+        # (samples missing in the DAT file have zero values)
+        first_row = 0
+        if self._has_time_window:
+            # samples are in time order: binary search the window limits,
+            # reading only the time of a few rows
+            row_time_struct = struct.Struct("<II")
+
+            def row_time(k: int) -> float:
+                return self._as_stored_times(
+                    [get_time(*row_time_struct.unpack_from(contents, k * row_size))])[0]
+
+            end_row = rows
+            if self._start_time is not None:
+                first_row = bisect.bisect_left(range(rows), self._start_time,
+                                               key=row_time)
+            if self._end_time is not None:
+                end_row = bisect.bisect_right(range(rows), self._end_time,
+                                              lo=first_row, key=row_time)
+            rows = max(0, end_row - first_row)
+            self._total_samples = rows
 
         # Each field is unpacked from all rows at once, which is much faster
         # than unpacking the rows one by one.
-        sample_numbers = _unpack_column(contents, row_size, 0, "I")
+        sample_numbers = _unpack_column(contents, row_size, 0, "I", first_row, rows)
         timestamps = _unpack_column(contents, row_size,
-                                    self.SAMPLE_NUMBER_BYTES, "I")
-        # 0xFFFFFFFF marks a missing timestamp in binary files
-        _copy_values(self.time, 0, [
-            self._get_time(n, ts_val if ts_val != _TIMESTAMP_MISSING else None,
-                           time_base, time_mult)
-            for n, ts_val in zip(sample_numbers, timestamps)])
+                                    self.SAMPLE_NUMBER_BYTES, "I", first_row, rows)
+        times = [get_time(n, ts_val) for n, ts_val in zip(sample_numbers, timestamps)]
+        self._contents = contents
+        self._row_size = row_size
+        self._first_row = first_row
+        self._rows = rows
 
-        # Extract analog channel values.
-        offset = self.SAMPLE_NUMBER_BYTES + self.TIME_BYTES
-        for ichannel in range(achannels):
-            yint = _unpack_column(contents, row_size, offset,
-                                  self.ANALOG_TYPECODE)
-            _copy_values(self.analog[ichannel], 0,
-                         self._get_analog_values(yint, a[ichannel], b[ichannel]))
-            offset += self.ANALOG_BYTES
+        self.time = _preallocate_values(
+            "d" if self._use_double_precision else "f",
+            self._total_samples,
+            self._use_numpy_arrays,
+        )
+        _copy_values(self.time, 0, times)
 
-        # Extract status channel values.
-        for igroup in range(groups_of_16bits):
-            group = _unpack_column(contents, row_size, offset,
-                                   self.STATUS_TYPECODE)
+        if self._lazy:
+            self.analog = _LazyChannels(achannels, self._decode_analog)
+            self.status = _LazyChannels(schannels, self._decode_status)
+        else:
+            self.analog = [self._decode_analog(i) for i in range(achannels)]
+            self.status = [self._decode_status(i) for i in range(schannels)]
+            self._contents = None
 
-            # for each group of 16 bits, extract the status channels
-            maxchn = min((igroup + 1) * 16, schannel)
-            for ichannel in range(igroup * 16, maxchn):
-                chnindex = ichannel - igroup * 16
-                _copy_values(self.status[ichannel], 0,
-                             self._get_status_values(group, chnindex))
-            offset += self.STATUS_BYTES
+    def _unpack(self, offset: int, typecode: str):
+        """Unpack the field at offset of the rows to decode."""
+        if self._contents is None:
+            raise ComtradeError("The DAT file is closed.")
+        return _unpack_column(self._contents, self._row_size, offset,
+                              typecode, self._first_row, self._rows)
+
+    def _decode_analog(self, ichannel: int):
+        """Return the values of the analog channel ichannel."""
+        channel = self._cfg.analog_channels[ichannel]
+        offset = self.SAMPLE_NUMBER_BYTES + self.TIME_BYTES + \
+            ichannel * self.ANALOG_BYTES
+        yint = self._unpack(offset, self.ANALOG_TYPECODE)
+        values = _preallocate_values(
+            "d" if self._use_double_precision else "f",
+            self._total_samples,
+            self._use_numpy_arrays,
+        )
+        _copy_values(values, 0, self._get_analog_values(yint, channel.a, channel.b))
+        return values
+
+    def _decode_status(self, ichannel: int):
+        """Return the values of the status channel ichannel."""
+        igroup, chnindex = divmod(ichannel, 16)
+        offset = self.SAMPLE_NUMBER_BYTES + self.TIME_BYTES + \
+            self._cfg.analog_count * self.ANALOG_BYTES + \
+            igroup * self.STATUS_BYTES
+        group = self._unpack(offset, self.STATUS_TYPECODE)
+        values = _preallocate_values("i", self._total_samples,
+                                     self._use_numpy_arrays)
+        _copy_values(values, 0, self._get_status_values(group, chnindex))
+        return values
 
 
 class _Binary32DatReader(_BinaryDatReader):
