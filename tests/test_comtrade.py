@@ -950,6 +950,75 @@ class TestCfgBinaryMissingDataReading(unittest.TestCase):
         self.assertTrue(math.isnan(self.comtrade.analog[3][3]))
 
 
+COMTRADE_SAMPLE_ASCII_PADDED_MISSING_CFG = """STATION_NAME,EQUIPMENT,1999
+2,2A,0D
+1, IA,,,A,1,0,0,-32767,32767,1,1,P
+2, IB,,,A,2,0,0,-32767,32767,1,1,P
+60
+1
+1000,3
+01/01/2020,10:30:00.000000
+01/01/2020,10:30:00.000000
+ASCII
+1
+"""
+
+# Missing markers (99999) with a leading or trailing space.
+COMTRADE_SAMPLE_ASCII_PADDED_MISSING_DAT = "1,0, 99999,5\n2,1000,99999 , 6\n3,2000, 20 , 99999 \n"
+
+
+class TestAsciiPaddedMissingData(unittest.TestCase):
+    """ASCII DAT missing data markers padded with whitespace (1999 and 2013
+    revisions)."""
+    def setUp(self):
+        self.comtrade = Comtrade(ignore_warnings=True)
+        self.comtrade.read(COMTRADE_SAMPLE_ASCII_PADDED_MISSING_CFG,
+                           COMTRADE_SAMPLE_ASCII_PADDED_MISSING_DAT)
+
+    def test_leading_space(self):
+        self.assertTrue(math.isnan(self.comtrade.analog[0][0]))
+
+    def test_trailing_space(self):
+        # the field is followed by another one, so the line strip doesn't
+        # remove its trailing space
+        self.assertTrue(math.isnan(self.comtrade.analog[0][1]))
+
+    def test_last_field(self):
+        self.assertTrue(math.isnan(self.comtrade.analog[1][2]))
+
+    def test_values(self):
+        a, b = self.comtrade.analog
+        self.assertEqual(a[2], 20.0)
+        self.assertEqual((b[0], b[1]), (10.0, 12.0))
+
+
+COMTRADE_SAMPLE_1991_PADDED_MISSING_CFG = """STATION_NAME,EQUIPMENT
+2,2A,0D
+1,IA,A,LINE,A,1,0,0,-32767,32767
+2,IB,A,LINE,A,1,0,0,-32767,32767
+60
+1
+1000,2
+01/01/1991,10:30:00.000000
+01/01/1991,10:30:00.000000
+ASCII
+"""
+
+# The 1991 revision marks a missing analog value with a blank field.
+COMTRADE_SAMPLE_1991_PADDED_MISSING_DAT = "1,0, ,5\n2,1000,6,\n"
+
+
+class TestAscii1991BlankMissingData(unittest.TestCase):
+    """A blank 1991 revision missing data field containing a space."""
+    def test_blank_field_with_space(self):
+        obj = Comtrade(ignore_warnings=True)
+        obj.read(COMTRADE_SAMPLE_1991_PADDED_MISSING_CFG,
+                 COMTRADE_SAMPLE_1991_PADDED_MISSING_DAT)
+        self.assertTrue(math.isnan(obj.analog[0][0]))
+        self.assertEqual(obj.analog[0][1], 6.0)
+        self.assertEqual(obj.analog[1][0], 5.0)
+
+
 class TestDoublePrecisionHandling(unittest.TestCase):
     def test_should_use_single_by_default(self):
         comtrade = Comtrade(ignore_warnings=True)
