@@ -2240,8 +2240,9 @@ class _AsciiDatReader(_DatReader):
 
             for i in range(analog_count):
                 ai, bi = a[i], b[i]
+                # the missing data marker may be surrounded by whitespace
                 _copy_values(self.analog[i], irow,
-                             [ai * float(value) + bi if value != missing else nan
+                             [ai * float(value) + bi if value.strip() != missing else nan
                               for value in map(operator.itemgetter(i + 2), rows)])
 
             # status values are the last ones of each line
