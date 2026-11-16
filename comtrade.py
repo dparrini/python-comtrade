@@ -191,12 +191,24 @@ def _prevent_null(str_value: str, value_type: type, default_value):
         return value_type(str_value)
 
 
+def _expand_year(year_str: str) -> int:
+    """Return the year of a date field as int. Two-digit years, as written in
+    the 1991 revision format (mm/dd/yy), are expanded: 70 to 99 are 1970 to
+    1999, the others are 2000 to 2069."""
+    year = int(year_str)
+    if len(year_str) == 2:
+        return year + (2000 if year < 70 else 1900)
+    return year
+
+
 def _get_date(date_str: str) -> tuple:
+    """Return the day, month and year of a date field, which may be shorter
+    than expected. Returns zeros for an invalid field."""
     m = _re_date.match(date_str)
     if m is not None:
         day = int(m.group(1))
         month = int(m.group(2))
-        year = int(m.group(3))
+        year = _expand_year(m.group(3))
         return day, month, year
     return 0, 0, 0
 
@@ -266,7 +278,7 @@ def _read_timestamp(timestamp_line: str, rev_year: str, ignore_warnings: bool = 
         if len(values) >= 2:
             date_str, time_str = values[0:2]
             if len(date_str.strip()) > 0:
-                # 1991 Format Uses mm/dd/yyyy format
+                # 1991 Format Uses mm/dd/yy format
                 if rev_year == REV_1991:
                     month, day, year = _get_date(date_str)
                 # Modern Formats Use dd/mm/yyyy format

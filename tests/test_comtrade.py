@@ -133,6 +133,18 @@ class TestTimestamp(unittest.TestCase):
         self.assertEqual(month, 1)
         self.assertEqual(year, 2000)
 
+    def test_two_digit_year(self):
+        # _get_date returns the fields in the order they are written
+        self.assertEqual(comtrade._get_date("01/31/91"), (1, 31, 1991))
+        self.assertEqual(comtrade._get_date("12/31/99"), (12, 31, 1999))
+        self.assertEqual(comtrade._get_date("01/01/00"), (1, 1, 2000))
+        self.assertEqual(comtrade._get_date("01/01/26"), (1, 1, 2026))
+        self.assertEqual(comtrade._get_date("01/01/69"), (1, 1, 2069))
+        self.assertEqual(comtrade._get_date("01/01/70"), (1, 1, 1970))
+        # four-digit years are kept as written
+        self.assertEqual(comtrade._get_date("01/31/1991"), (1, 31, 1991))
+        self.assertEqual(comtrade._get_date("00/00/0000"), (0, 0, 0))
+
     def test_complete_time(self):
         complete_time = "10:30:00.228000"
         hour, minute, second, microsecond, \
@@ -174,6 +186,47 @@ class TestTimestamp(unittest.TestCase):
         self.assertEqual(second, 3)
         self.assertEqual(microsecond, 12345)  # s the decimal .789
         self.assertFalse(in_nanoseconds)
+
+
+COMTRADE_SAMPLE_1991_DATE_CFG = """STATION_NAME,EQUIPMENT
+1,1A,0D
+1,IA,A,LINE,A,1,0,0,-32767,32767
+60
+1
+1000,2
+01/31/91,10:30:00.000000
+01/31/91,10:30:00.001000
+ASCII
+"""
+
+COMTRADE_SAMPLE_1991_DATE_DAT = "1,0,1\n2,1000,2\n"
+
+
+class TestTwoDigitYear(unittest.TestCase):
+    """Two-digit years of the 1991 revision CFG (mm/dd/yy)."""
+    def test_timestamp(self):
+        obj = Comtrade(ignore_warnings=True)
+        obj.read(COMTRADE_SAMPLE_1991_DATE_CFG, COMTRADE_SAMPLE_1991_DATE_DAT)
+        self.assertEqual(obj.rev_year, "1991")
+        self.assertEqual(obj.start_timestamp,
+                         dt.datetime(1991, 1, 31, 10, 30, 0, 0, None))
+        self.assertEqual(obj.trigger_timestamp,
+                         dt.datetime(1991, 1, 31, 10, 30, 0, 1000, None))
+        self.assertAlmostEqual(obj.trigger_time, 0.001)
+
+    def test_no_missing_date_warning(self):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            obj = Comtrade()
+            obj.read(COMTRADE_SAMPLE_1991_DATE_CFG,
+                     COMTRADE_SAMPLE_1991_DATE_DAT)
+        self.assertEqual(obj.start_timestamp.year, 1991)
+
+    def test_four_digit_year(self):
+        obj = Comtrade(ignore_warnings=True)
+        obj.read(COMTRADE_SAMPLE_1991_CFG, "1,0,1,2,1\n2,1000,3,4,0\n")
+        self.assertEqual(obj.start_timestamp,
+                         dt.datetime(2000, 1, 2, 10, 30, 0, 0, None))
 
 
 class TestCfg1Reading(unittest.TestCase):
