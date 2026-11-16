@@ -516,7 +516,7 @@ class Cfg:
             samp, endsamp = _read_sep_values(line)
             samp = float(samp)
             endsamp = int(endsamp)
-            self.sample_rates.append([samp, endsamp])
+            self._sample_rates.append([samp, endsamp])
             line_count = line_count + 1
 
         # First data point time and time base
