@@ -957,14 +957,15 @@ class Cfg:
                                                       self._ignore_warnings)
                 line_count = line_count + 1
 
-                line = _eof_strip(cfg.readline())
-                # tmq_code and leapsec
-                if line:
-                    tmq_code, leap_second = _read_sep_values(line, 2)
-                    self._tmq_code = _parse_tmq_code(tmq_code,
-                                                     self._ignore_warnings)
-                    self._leap_second = _parse_leap_second(leap_second,
-                                                           self._ignore_warnings)
+            # tmq_code and leapsec, which follow the time code line even when
+            # that line is empty
+            line = _eof_strip(cfg.readline())
+            if line:
+                tmq_code, leap_second = _read_sep_values(line, 2)
+                self._tmq_code = _parse_tmq_code(tmq_code,
+                                                 self._ignore_warnings)
+                self._leap_second = _parse_leap_second(leap_second,
+                                                       self._ignore_warnings)
 
     def _get_time_base(self, using_nanoseconds: bool):
         """

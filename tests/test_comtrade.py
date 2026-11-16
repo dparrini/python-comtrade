@@ -1161,6 +1161,57 @@ class TestTimeCodeReading(unittest.TestCase):
         self.assertEqual(cfg.tmq_code, 0)
         self.assertEqual(cfg.leap_second, 0)
 
+    def test_empty_time_code_line(self):
+        # the tmq line follows an empty time code line
+        cfg = self._read_cfg_with_last_lines("\nB,3\n")
+        self.assertEqual(cfg.time_code, "")
+        self.assertEqual(cfg.local_code, "")
+        self.assertIsNone(cfg.time_offset)
+        self.assertIsNone(cfg.local_offset)
+        self.assertEqual(cfg.tmq_code, 0xB)
+        self.assertEqual(cfg.leap_second, 3)
+        self.assertIsNone(cfg.start_timestamp_utc)
+
+    def test_empty_time_code_line_without_tmq_line(self):
+        cfg = self._read_cfg_with_last_lines("\n")
+        self.assertEqual(cfg.time_code, "")
+        self.assertIsNone(cfg.time_offset)
+        self.assertIsNone(cfg.tmq_code)
+        self.assertIsNone(cfg.leap_second)
+
+    def test_empty_time_code_and_tmq_lines(self):
+        cfg = self._read_cfg_with_last_lines("\n\n")
+        self.assertIsNone(cfg.time_offset)
+        self.assertIsNone(cfg.tmq_code)
+        self.assertIsNone(cfg.leap_second)
+
+    def test_empty_time_code_line_record(self):
+        cfg_text = COMTRADE_SAMPLE_2013_EMPTY_TIME_CODE_CFG
+        obj = Comtrade(ignore_warnings=True)
+        obj.read(cfg_text, "1,0,1\n2,1000,2\n")
+        self.assertEqual(obj.rev_year, "2013")
+        self.assertEqual(obj.cfg.tmq_code, 0xB)
+        self.assertEqual(obj.cfg.leap_second, 3)
+        self.assertIsNone(obj.start_timestamp_utc)
+        self.assertEqual(obj.start_timestamp,
+                         dt.datetime(2013, 1, 1, 10, 30, 0, 0, None))
+        self.assertEqual(obj.total_samples, 2)
+
+
+COMTRADE_SAMPLE_2013_EMPTY_TIME_CODE_CFG = """STATION_NAME,EQUIPMENT,2013
+1,1A,0D
+1, IA,,,A,1,0,0,-32768,32767,1,1,S
+60
+1
+1000,2
+01/01/2013,10:30:00.000000
+01/01/2013,10:30:00.000000
+ASCII
+1
+
+B,3
+"""
+
 
 INF_SAMPLE = """; Information file sample
 [Public Record_Information]
