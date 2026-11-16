@@ -1216,8 +1216,8 @@ class TestDatRowsCount(unittest.TestCase):
     """DAT files with more or fewer rows than the CFG total samples."""
     use_numpy_arrays = False
 
-    def read(self, dat_format, rows):
-        obj = Comtrade(ignore_warnings=True,
+    def read(self, dat_format, rows, ignore_warnings=True, **kwargs):
+        obj = Comtrade(ignore_warnings=ignore_warnings,
                        use_numpy_arrays=self.use_numpy_arrays)
         if dat_format == "ASCII":
             dat = "".join("{0},{1},{0},{2}\n".format(n, ts, status)
@@ -1225,7 +1225,7 @@ class TestDatRowsCount(unittest.TestCase):
         else:
             dat = b"".join(struct.pack("<IIhH", n, ts, n, status)
                            for n, ts, status in rows)
-        obj.read(COMTRADE_SAMPLE_5_CFG.format(format=dat_format), dat)
+        obj.read(COMTRADE_SAMPLE_5_CFG.format(format=dat_format), dat, **kwargs)
         return obj
 
     def test_more_rows(self):
@@ -1237,20 +1237,124 @@ class TestDatRowsCount(unittest.TestCase):
                 self.assertEqual(list(obj.status[0]), [1, 0, 1, 0, 1, 0])
 
     def test_fewer_rows(self):
-        # values of the samples missing in the DAT file are zero
+        # only the samples in the DAT file are loaded (no zero padding)
         rows = [(n, (n - 1) * 1000, n % 2) for n in range(1, 5)]
         for dat_format in ("ASCII", "BINARY"):
             with self.subTest(format=dat_format):
                 obj = self.read(dat_format, rows)
-                self.assertEqual(list(obj.analog[0]), [1, 2, 3, 4, 0, 0])
-                self.assertEqual(list(obj.status[0]), [1, 0, 1, 0, 0, 0])
-                self.assertEqual(len(obj.time), 6)
+                self.assertEqual(list(obj.analog[0]), [1, 2, 3, 4])
+                self.assertEqual(list(obj.status[0]), [1, 0, 1, 0])
+                self.assertEqual(len(obj.time), 4)
+                self.assertEqual(obj.total_samples, 4)
+
+    def test_fewer_rows_warning(self):
+        rows = [(n, (n - 1) * 1000, n % 2) for n in range(1, 5)]
+        for dat_format in ("ASCII", "BINARY"):
+            with self.subTest(format=dat_format):
+                with self.assertWarns(Warning) as context:
+                    self.read(dat_format, rows, ignore_warnings=False)
+                self.assertIn("2 fewer samples than the 6",
+                              str(context.warning))
+
+    def test_no_warning_for_all_or_more_rows(self):
+        for count in (6, 8):
+            rows = [(n, (n - 1) * 1000, n % 2) for n in range(1, count + 1)]
+            for dat_format in ("ASCII", "BINARY"):
+                with self.subTest(format=dat_format, rows=count), \
+                        warnings.catch_warnings():
+                    warnings.simplefilter("error")
+                    self.read(dat_format, rows, ignore_warnings=False)
+
+    def test_no_warning_for_time_window_end(self):
+        # stopping at the end of a time window is not a missing sample
+        rows = [(n, (n - 1) * 1000, n % 2) for n in range(1, 7)]
+        for dat_format in ("ASCII", "BINARY"):
+            with self.subTest(format=dat_format), warnings.catch_warnings():
+                warnings.simplefilter("error")
+                obj = self.read(dat_format, rows, ignore_warnings=False,
+                                end_time=0.0015)
+                self.assertEqual(list(obj.analog[0]), [1, 2])
+
+    def test_huge_declared_samples(self):
+        # a CFG file declaring far more samples than the DAT file has must
+        # not allocate memory for them (it would raise MemoryError)
+        cfg = COMTRADE_SAMPLE_5_CFG.replace("500,6", "500,1000000000000")
+        rows = [(n, (n - 1) * 1000, n % 2) for n in range(1, 4)]
+        for dat_format in ("ASCII", "BINARY"):
+            for lazy in (False, True):
+                with self.subTest(format=dat_format, lazy=lazy):
+                    if dat_format == "ASCII":
+                        dat = "".join("{0},{1},{0},{2}\n".format(*row)
+                                      for row in rows)
+                    else:
+                        dat = b"".join(struct.pack("<IIhH", n, ts, n, status)
+                                       for n, ts, status in rows)
+                    obj = Comtrade(ignore_warnings=True,
+                                   use_numpy_arrays=self.use_numpy_arrays)
+                    obj.read(cfg.format(format=dat_format), dat, lazy=lazy)
+                    self.assertEqual(obj.total_samples, 3)
+                    self.assertEqual(list(obj.analog[0]), [1, 2, 3])
+                    self.assertEqual(list(obj.status[0]), [1, 0, 1])
 
 
 @unittest.skipUnless(comtrade._HAS_NUMPY, "numpy is not installed")
 class TestDatRowsCountNumpy(TestDatRowsCount):
     """DAT files with more or fewer rows, using numpy arrays."""
     use_numpy_arrays = True
+
+
+class TestMalformedFiles(unittest.TestCase):
+    """Malformed CFG and DAT files raise ComtradeError, which is also a
+    ValueError (the error they used to raise)."""
+    def read(self, cfg, dat):
+        Comtrade(ignore_warnings=True).read(cfg, dat)
+
+    def assertInvalid(self, cfg, dat, message):
+        with self.assertRaises(comtrade.ComtradeError) as context:
+            self.read(cfg, dat)
+        self.assertIsInstance(context.exception, ValueError)
+        self.assertIn(message, str(context.exception))
+
+    def test_missing_analog_channel_lines(self):
+        # a short CFG file can't claim any number of channels
+        cfg = "STATION_NAME,EQUIPMENT,1999\n1000000000,1000000000A,0D\n"
+        self.assertInvalid(cfg, "", "analog channel #1")
+
+    def test_missing_status_channel_line(self):
+        cfg = COMTRADE_SAMPLE_5_CFG.format(format="ASCII").replace(
+            "2,1A,1D", "3,1A,2D")
+        self.assertInvalid(cfg, COMTRADE_SAMPLE_5_DAT, "Invalid CFG file")
+
+    def test_missing_status_channel_line_at_end(self):
+        cfg = "STATION_NAME,EQUIPMENT,1999\n2,1A,1D\n" \
+            "1, IA,,,A,1,0,0,-32768,32767,1,1,S\n"
+        self.assertInvalid(cfg, "", "status channel #1")
+
+    def test_invalid_cfg_number(self):
+        cfg = COMTRADE_SAMPLE_5_CFG.format(format="ASCII").replace(
+            "1000,4", "1000,four")
+        self.assertInvalid(cfg, COMTRADE_SAMPLE_5_DAT, "Invalid CFG file")
+
+    def test_short_dat_line(self):
+        dat = COMTRADE_SAMPLE_5_DAT.replace("3,2000,3,0", "3,2000")
+        self.assertInvalid(COMTRADE_SAMPLE_5_CFG.format(format="ASCII"), dat,
+                           "Invalid DAT file")
+
+    def test_invalid_dat_number(self):
+        dat = COMTRADE_SAMPLE_5_DAT.replace("3,2000,3,0", "3,2000,x,0")
+        self.assertInvalid(COMTRADE_SAMPLE_5_CFG.format(format="ASCII"), dat,
+                           "Invalid DAT file")
+
+    def test_load_invalid_dat_file(self):
+        tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp_dir)
+        cfg_path = os.path.join(tmp_dir, "invalid.cfg")
+        with open(cfg_path, "w") as file:
+            file.write(COMTRADE_SAMPLE_5_CFG.format(format="ASCII"))
+        with open(os.path.join(tmp_dir, "invalid.dat"), "w") as file:
+            file.write("1,0,x,0\n")
+        with self.assertRaises(comtrade.ComtradeError):
+            Comtrade(ignore_warnings=True).load(cfg_path)
 
 
 @unittest.skipUnless(comtrade._HAS_NUMPY, "numpy is not installed")

@@ -336,6 +336,26 @@ comtrade.load("sample_files/sample_ascii.cff", encoding="iso-8859-1")
 ```
 
 
+#### Incomplete and malformed files
+
+Only the samples present in the DAT file are loaded: if it has fewer samples than the CFG file
+declares, `Comtrade.total_samples` is the number of samples actually read and a warning is
+issued. Memory use follows the size of the DAT file, not the counts declared in the CFG file,
+so files from untrusted sources can't make the reader allocate more than their data needs.
+
+Malformed CFG and DAT files (such as missing channel description lines, non-numeric fields, or
+DAT lines with fewer values than channels) raise `comtrade.ComtradeError`, a `ValueError`
+subclass:
+
+```python
+import comtrade
+try:
+    rec = comtrade.load("my_record.cfg")
+except comtrade.ComtradeError as error:
+    print("Invalid COMTRADE file:", error)
+```
+
+
 ## Documentation
 
 https://github.com/dparrini/python-comtrade

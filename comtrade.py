@@ -105,6 +105,9 @@ _WARNING_INVALID_RATIO = "Invalid ratio information of analog channel {} \
 (primary={}, secondary={}, PS=\"{}\"). Values are not scaled."
 # Unrecognized time of a timestamp
 _WARNING_INVALID_TIME = "Invalid time \"{}\". Using 00:00:00."
+# DAT file with fewer samples than the CFG file declares
+_WARNING_MISSING_SAMPLES = "The DAT file has {} fewer samples than the {} \
+declared in the CFG file. Only the samples in the DAT file were loaded."
 # Date time with year 0, month 0 and/or day 0.
 _WARNING_MIN_DATE = "Missing date values. Using minimum values: {}."
 # Invalid 2013 revision time information fields
@@ -138,7 +141,10 @@ _MAX_TIMESTAMP = 0xFFFFFFFE
 _NEWLINE = "\r\n"
 
 
-class ComtradeError(Exception):
+class ComtradeError(ValueError):
+    """Invalid COMTRADE data or unsupported operation. It is a ValueError,
+    so that code catching the ValueError malformed files used to raise keeps
+    working."""
     pass
 
 
@@ -155,6 +161,14 @@ def _preallocate_values(array_type, size, use_numpy_arrays):
     if _HAS_NUMPY and use_numpy_arrays:
         return numpy.zeros(size, dtype=type_mapping_numpy[array_type])
     return array.array(array_type, [0]) * size
+
+
+def _as_values(values: array.array, use_numpy_arrays: bool):
+    """Return the array values as a numpy array of the same type, if numpy
+    arrays are used."""
+    if _HAS_NUMPY and use_numpy_arrays:
+        return numpy.array(values, dtype=values.typecode)
+    return values
 
 
 def _copy_values(target, start: int, values):
@@ -371,13 +385,6 @@ def _to_utc(timestamp: dt.datetime, offset: Union[dt.timedelta, None]) -> Union[
     except OverflowError:
         # placeholder timestamps (missing dates) near datetime.min
         return None
-
-
-def _truncate_values(values, size: int):
-    """Return the first size values (array.array or numpy array)."""
-    if len(values) == size:
-        return values
-    return values[:size]
 
 
 class _LazyChannels(collections.abc.Sequence):
@@ -818,7 +825,29 @@ class Cfg:
             self._read_io(cfg_lines)
 
     def _read_io(self, cfg):
-        """Read CFG-format lines and stores its data."""
+        """Read CFG-format lines and stores its data. Malformed lines raise
+        ComtradeError."""
+        try:
+            self._parse_io(cfg)
+        except ComtradeError:
+            raise
+        except (ValueError, IndexError, TypeError) as error:
+            raise ComtradeError("Invalid CFG file: {}".format(error)) from error
+
+    @staticmethod
+    def _read_channel_line(cfg, kind: str, ichn: int) -> str:
+        """Read the description line of a channel. A file declaring more
+        channels than it describes is invalid (giving each missing channel
+        default values would let a short file claim any number of
+        channels)."""
+        line = cfg.readline()
+        if not line:
+            raise ComtradeError("Missing the description line of {} channel "
+                                "#{}.".format(kind, ichn + 1))
+        return line
+
+    def _parse_io(self, cfg):
+        """Parse CFG-format lines and stores its data."""
         line_count = 0
         self._nrates = 1
         self._sample_rates = []
@@ -862,7 +891,7 @@ class Cfg:
 
         # Analog channel description lines
         for ichn in range(self._analog_count):
-            line = cfg.readline()
+            line = self._read_channel_line(cfg, "analog", ichn)
             packed = _read_sep_values(line, 10, '0')
             # unpack values
             n, name, ph, ccbm, uu, a, b, skew, cmin, cmax = packed[:10]
@@ -885,7 +914,7 @@ class Cfg:
 
         # Status channel description lines
         for ichn in range(self._status_count):
-            line = cfg.readline()
+            line = self._read_channel_line(cfg, "status", ichn)
             # unpack values
             values = _read_sep_values(line)
             if len(values) == 3:
@@ -1353,6 +1382,9 @@ class Comtrade:
         self._status_phases = [channel.ph for channel in cfg.status_channels]
 
     def _dat_extract_data(self, dat) -> None:
+        if dat.missing_samples > 0 and not self.ignore_warnings:
+            warnings.warn(Warning(_WARNING_MISSING_SAMPLES.format(
+                dat.missing_samples, self._cfg.sample_rates[-1][1])))
         self._time_values = dat.time
         self._analog_values = dat.analog
         self._status_values = dat.status
@@ -2013,8 +2045,6 @@ class AnalogChannel(Channel):
 class _DatReader:
     """Abstract DatReader class. Used to parse DAT file contents."""
     read_mode = "r"
-    # whether the values are allocated before parsing, for all samples
-    preallocate_values = True
 
     def __init__(self, **kwargs):
         """DatReader class constructor."""
@@ -2039,6 +2069,8 @@ class _DatReader:
         self.analog = []
         self.status = []
         self._total_samples = 0
+        # samples declared in the CFG file, but missing in the DAT file
+        self.missing_samples = 0
 
         # To be replaced by subclasses.
         self.DATA_MISSING = None
@@ -2078,7 +2110,6 @@ class _DatReader:
         self.file_path = dat_filepath
         self._content = None
         if os.path.isfile(self.file_path):
-            # extract CFG file information regarding data dimensions
             self._cfg = cfg
             self._preallocate()
             if self.read_mode == "rb":
@@ -2089,7 +2120,7 @@ class _DatReader:
                         self._mmap = mmap.mmap(file.fileno(), 0,
                                                access=mmap.ACCESS_READ)
                 try:
-                    self.parse(self._mmap if self._mmap is not None else b"")
+                    self._checked_parse(self._mmap if self._mmap is not None else b"")
                 except BaseException:
                     self.close()
                     raise
@@ -2099,7 +2130,7 @@ class _DatReader:
                 if "encoding" not in kwargs:
                     kwargs["encoding"] = "utf-8"
                 with open(self.file_path, self.read_mode, **kwargs) as contents:
-                    self.parse(contents)
+                    self._checked_parse(contents)
         else:
             raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT),
                                     self.file_path)
@@ -2112,12 +2143,23 @@ class _DatReader:
         self._content = dat_lines
         self._cfg = cfg
         self._preallocate()
-        self.parse(dat_lines)
+        self._checked_parse(dat_lines)
+
+    def _checked_parse(self, contents):
+        """Parse the DAT contents. Malformed contents raise ComtradeError."""
+        try:
+            self.parse(contents)
+        except ComtradeError:
+            raise
+        except (ValueError, IndexError, TypeError, struct.error) as error:
+            raise ComtradeError("Invalid DAT file: {}".format(error)) from error
 
     def _preallocate(self):
-        # read from the cfg file the number of samples in the dat file
-        steps = self._cfg.sample_rates[-1][1]  # last samp field
-        self._total_samples = steps
+        # the number of samples declared in the CFG file. Values are only
+        # allocated for the samples actually in the DAT file, so that memory
+        # use follows the DAT file size, not the (untrusted) CFG counts.
+        self._total_samples = self._cfg.sample_rates[-1][1]  # last samp field
+        self.missing_samples = 0
 
         # first sample number and its time for each sample rate segment.
         # Each sample is 1/samp after the previous one, where samp is the
@@ -2129,32 +2171,6 @@ class _DatReader:
             if samp != 0.0:
                 start_time += (endsamp - start_n) / samp
             start_n = endsamp
-
-        if not self.preallocate_values:
-            return
-
-        # analog and status count
-        analog_count = self._cfg.analog_count
-        status_count = self._cfg.status_count
-
-        # preallocate analog and status values
-        self.time = _preallocate_values(
-            "d" if self._use_double_precision else "f",
-            steps,
-            self._use_numpy_arrays,
-        )
-        self.analog = [None] * analog_count
-        self.status = [None] * status_count
-        # preallocate each channel values with zeros
-        for i in range(analog_count):
-            self.analog[i] = _preallocate_values(
-                "d" if self._use_double_precision else "f",
-                steps,
-                self._use_numpy_arrays,
-            )
-        for i in range(status_count):
-            self.status[i] = _preallocate_values("i", steps,
-                                                 self._use_numpy_arrays)
 
     def _get_rate_segment(self, n) -> tuple:
         """Get the sampling rate, first sample number and its time for the
@@ -2219,6 +2235,12 @@ class _AsciiDatReader(_DatReader):
         a = [x.a for x in self._cfg.analog_channels]
         b = [x.b for x in self._cfg.analog_channels]
 
+        # the values grow as the lines are read
+        float_type = "d" if self._use_double_precision else "f"
+        time_values = array.array(float_type)
+        analog_values = [array.array(float_type) for _ in range(analog_count)]
+        status_values = [array.array("i") for _ in range(status_count)]
+
         # extract lines
         if type(contents) is str:
             lines = contents.splitlines()
@@ -2233,9 +2255,8 @@ class _AsciiDatReader(_DatReader):
         # Lines are read in blocks and the values of each channel in a block
         # are converted at once, which is much faster than one by one.
         block_size = max(1, _ASCII_BLOCK_VALUES // (analog_count + status_count + 2))
-        # rows read and rows stored (only the ones within the time window)
+        # rows read (all of them, or up to past the time window end)
         rows_read = 0
-        irow = 0
         past_window = False
         while rows_read < self._total_samples and not past_window:
             # <sub> (0x1A) may appear appended to the end of text files on
@@ -2261,28 +2282,28 @@ class _AsciiDatReader(_DatReader):
                 selected = [k for k, t in enumerate(times) if self._in_time_window(t)]
                 rows = [rows[k] for k in selected]
                 times = [times[k] for k in selected]
-            _copy_values(self.time, irow, times)
+            time_values.extend(times)
 
             for i in range(analog_count):
                 ai, bi = a[i], b[i]
                 # the missing data marker may be surrounded by whitespace
-                _copy_values(self.analog[i], irow,
-                             [ai * float(value) + bi if value.strip() != missing else nan
-                              for value in map(operator.itemgetter(i + 2), rows)])
+                analog_values[i].extend(
+                    [ai * float(value) + bi if value.strip() != missing else nan
+                     for value in map(operator.itemgetter(i + 2), rows)])
 
             # status values are the last ones of each line
             for i in range(status_count):
-                _copy_values(self.status[i], irow,
-                             list(map(int, map(operator.itemgetter(i - status_count), rows))))
+                status_values[i].extend(
+                    map(int, map(operator.itemgetter(i - status_count), rows)))
 
-            irow += len(rows)
-
-        if self._has_time_window:
-            # keep only the samples within the time window
-            self._total_samples = irow
-            self.time = _truncate_values(self.time, irow)
-            self.analog = [_truncate_values(values, irow) for values in self.analog]
-            self.status = [_truncate_values(values, irow) for values in self.status]
+        if not past_window:
+            self.missing_samples = self._total_samples - rows_read
+        # only the rows in the DAT file (and in the time window) are loaded
+        self._total_samples = len(time_values)
+        use_numpy = self._use_numpy_arrays
+        self.time = _as_values(time_values, use_numpy)
+        self.analog = [_as_values(values, use_numpy) for values in analog_values]
+        self.status = [_as_values(values, use_numpy) for values in status_values]
 
 
 class _BinaryDatReader(_DatReader):
@@ -2306,8 +2327,6 @@ class _BinaryDatReader(_DatReader):
             self.DATA_MISSING = -32768  # 0x8000
 
         self.read_mode = "rb"
-        # values are allocated when parsed, only for the samples loaded
-        self.preallocate_values = False
 
     def _get_analog_values(self, yint, a: float, b: float):
         """Return the analog values a * yint + b of the raw values yint,
@@ -2358,6 +2377,7 @@ class _BinaryDatReader(_DatReader):
         row_size = self.SAMPLE_NUMBER_BYTES + self.TIME_BYTES + \
             achannels * self.ANALOG_BYTES + dbytes
         rows = min(len(contents) // row_size, self.total_samples)
+        self.missing_samples = self.total_samples - rows
 
         def get_time(n: int, ts_val: int) -> float:
             # 0xFFFFFFFF marks a missing timestamp in binary files
@@ -2384,7 +2404,8 @@ class _BinaryDatReader(_DatReader):
                 end_row = bisect.bisect_right(range(rows), self._end_time,
                                               lo=first_row, key=row_time)
             rows = max(0, end_row - first_row)
-            self._total_samples = rows
+        # only the rows in the DAT file (and in the time window) are loaded
+        self._total_samples = rows
 
         # Each field is unpacked from all rows at once, which is much faster
         # than unpacking the rows one by one.
