@@ -1239,13 +1239,16 @@ class Comtrade:
         inf_file = kwargs.get("inf_file", None)
         hdr_file = kwargs.get("hdr_file", None)
         dat_options = {key: kwargs[key] for key in _DAT_OPTIONS if key in kwargs}
+        file_kwargs = {}
+        if "encoding" in kwargs:
+            file_kwargs["encoding"] = kwargs["encoding"]
 
         # which extension: CFG or CFF?
         file_ext = cfg_file[-3:]
         file_ext_upper = file_ext.upper()
         if file_ext_upper == "CFF":
             # check if the CFF file exists
-            self._load_cff(cfg_file, **dat_options)
+            self._load_cff(cfg_file, **dat_options, **file_kwargs)
 
         elif file_ext_upper == "CFG":
             basename = cfg_file[:-3]
@@ -1260,9 +1263,6 @@ class Comtrade:
                 hdr_file = basename + _get_same_case(file_ext, self.EXT_HDR)
 
             # load both cfg and dat
-            file_kwargs = {}
-            if "encoding" in kwargs:
-                file_kwargs["encoding"] = kwargs["encoding"]
             self._load_cfg(cfg_file, **file_kwargs)
             self._load_dat(dat_file, **dat_options)
 
@@ -1312,7 +1312,7 @@ class Comtrade:
             self._hdr = None
 
     @staticmethod
-    def _read_mixed_text_bin_data_as_text(cff_file) -> str:
+    def _read_mixed_text_bin_data_as_text(cff_file, encoding: str = "utf-8") -> str:
         chunk_delimiter = b"\n"
         current_chunk = []
         while True:
@@ -1322,7 +1322,7 @@ class Comtrade:
             if current_value != chunk_delimiter:
                 current_chunk.append(current_value)
             else:
-                yield b"".join(current_chunk).decode("utf-8", errors="ignore").strip()
+                yield b"".join(current_chunk).decode(encoding, errors="ignore").strip()
                 current_chunk = []
 
     def _load_cff(self, cff_file_path: str, **kwargs):
@@ -1332,6 +1332,8 @@ class Comtrade:
         hdr_lines = []
         inf_lines = []
         header_re = re.compile(_CFF_HEADER_REXP)
+        # text encoding of the CFG, HDR and INF sections
+        encoding = kwargs.get("encoding", "utf-8")
 
         with open(cff_file_path, "rb") as cff_file:
             # file type: CFG, HDR, INF, DAT
@@ -1341,7 +1343,8 @@ class Comtrade:
 
             line_number = 0
             last_match = None
-            for current_line in self._read_mixed_text_bin_data_as_text(cff_file):
+            for current_line in self._read_mixed_text_bin_data_as_text(cff_file,
+                                                                       encoding):
                 line_number += 1
                 mobj = header_re.match(current_line.strip().upper())
                 if mobj is not None:
