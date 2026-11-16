@@ -1,6 +1,6 @@
 # Python Comtrade
 
-__Python Comtrade__ is a module for Python 3 designed to read _Common Format for Transient Data Exchange_ (COMTRADE) files. These consists of oscillography data recorded during power system outages, control systems tests, validation and tests of field equipment, protective relaying logs, etc. The COMTRADE format is defined by IEEE Standards, summarized in the table below. Some equipment vendors put additional information in proprietary versions of it. This module aims IEEE definitions but may support those proprietary versions.
+__Python Comtrade__ is a module for Python 3 designed to read and write _Common Format for Transient Data Exchange_ (COMTRADE) files. These consists of oscillography data recorded during power system outages, control systems tests, validation and tests of field equipment, protective relaying logs, etc. The COMTRADE format is defined by IEEE Standards, summarized in the table below. Some equipment vendors put additional information in proprietary versions of it. This module aims IEEE definitions but may support those proprietary versions.
 
 
 | Standard                                  | Revision |
@@ -103,6 +103,48 @@ print(df.head())
 ```
 
 
+### Writing COMTRADE files
+
+`Comtrade.save()` writes the CFG and DAT files (plus HDR and INF files, if there is HDR or INF
+data), or a single CFF file if the path has the `.cff` extension. Choose the DAT file format with
+`ft` (`"ASCII"`, `"BINARY"`, `"BINARY32"` or `"FLOAT32"`) and the revision with `rev_year`
+(`"1999"`, `"2001"` or `"2013"`). Both default to the loaded file's ones.
+
+```python
+import comtrade
+rec = comtrade.load("sample_files/sample_ascii.cfg", start_time=0.0, end_time=0.1)
+rec.save("excerpt.cfg", ft="BINARY")  # excerpt.cfg and excerpt.dat
+rec.save("excerpt.cff", ft="FLOAT32", rev_year="2013")
+```
+
+`comtrade.from_dataframe()` creates a recording from a `pandas.DataFrame`, with one channel per
+column. The index holds the time values: seconds, a `DatetimeIndex` or a `TimedeltaIndex`
+(or use `time_column` or `sample_rate`). Boolean columns, and integer columns with only 0 and 1
+values, are status channels (or set `status_columns`).
+
+```python
+import comtrade
+rec = comtrade.from_dataframe(
+    df,
+    station_name="SUBSTATION",
+    rec_dev_id="RELAY 1",
+    frequency=60,
+    start_timestamp="2024-03-05 10:00:00",  # default: the first DatetimeIndex value
+    trigger_time=0.1,  # or trigger_timestamp
+    channels={"IA": {"uu": "A", "ph": "A", "primary": 600, "secondary": 5, "pors": "P"},
+              "TRIP": {"y": 0}},
+)
+rec.save("record.cfg", ft="FLOAT32")
+```
+
+For the integer formats (ASCII, BINARY and BINARY32), each analog channel's `a` and `b` fields
+are computed to use the whole format range, so values are rounded to `(max - min) / 65534` in
+BINARY files, for instance. FLOAT32 files keep the values as they are. Files loaded and saved in
+the same format keep their `a` and `b` fields. Missing values (NaN) are written as the format's
+missing data marker. Uniformly sampled data are saved with their sample rate. Other data are
+saved with timestamps only (`nrates=0`).
+
+
 ## Features
 
 This module implements some of the functionality described in each of the Standard revisions. The tables below lists some features and file formats and which revision supports it. It also shows whether this module support the feature or the format.
@@ -120,6 +162,7 @@ Feel free to pull requests implementing one of these unsupported features or fix
 | Binary data file format                               | x    | x     | x    | x    | x               |
 | Binary32 data file format                             |      |       |      | x    | x               |
 | Float32 data file format                              |      |       |      | x    | x               |
+| Writing files (CFG, DAT, HDR, INF and CFF)            |      | x     | x    | x    | x               |
 | Schema for phasor data                                |      |       |      | x    | no              |
 
 (1) HDR files are free text, available as a string in `Comtrade.hdr`.
