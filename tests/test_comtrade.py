@@ -1155,5 +1155,173 @@ class TestNanosecondTimestamps(unittest.TestCase):
         self.assertEqual(str(value), "2019-01-01T00:00:00.000001500")
 
 
+PARTIAL_LOADING_FILES = (
+    ("tests/sample_files/sample_ascii.cfg",),
+    ("tests/sample_files/sample_bin.cfg",),
+    ("tests/sample_files/sample_ascii.cff",),
+    ("tests/sample_files/sample_float32.cff",),
+)
+
+
+class TestTimeWindowLoading(unittest.TestCase):
+    """Loading only the samples within a time window."""
+    use_numpy_arrays = False
+
+    def load(self, *files, **kwargs):
+        return Comtrade(ignore_warnings=True,
+                        use_numpy_arrays=self.use_numpy_arrays).load(*files, **kwargs)
+
+    def assertWindow(self, obj, full, first: int, last: int):
+        self.assertEqual(obj.total_samples, last - first)
+        self.assertEqual(list(obj.time), list(full.time[first:last]))
+        self.assertEqual(_channel_values(obj),
+                         [values[first:last] for values in _channel_values(full)])
+
+    def test_window(self):
+        for files in PARTIAL_LOADING_FILES:
+            with self.subTest(files=files):
+                full = self.load(*files)
+                n = full.total_samples
+                first, last = n // 4, n // 2
+                obj = self.load(*files, start_time=full.time[first],
+                                end_time=full.time[last])
+                self.assertWindow(obj, full, first, last + 1)
+
+    def test_start_or_end_only(self):
+        for files in PARTIAL_LOADING_FILES:
+            with self.subTest(files=files):
+                full = self.load(*files)
+                n = full.total_samples
+                obj = self.load(*files, start_time=full.time[n // 2])
+                self.assertWindow(obj, full, n // 2, n)
+                obj = self.load(*files, end_time=full.time[n // 3])
+                self.assertWindow(obj, full, 0, n // 3 + 1)
+
+    def test_between_samples(self):
+        full = self.load("tests/sample_files/sample_bin.cfg")
+        t = list(full.time)
+        obj = self.load("tests/sample_files/sample_bin.cfg",
+                        start_time=(t[0] + t[1]) / 2, end_time=(t[2] + t[3]) / 2)
+        self.assertWindow(obj, full, 1, 3)
+
+    def test_empty_window(self):
+        for files in PARTIAL_LOADING_FILES:
+            with self.subTest(files=files):
+                obj = self.load(*files, start_time=1000.0)
+                self.assertEqual(obj.total_samples, 0)
+                self.assertEqual(len(obj.time), 0)
+                self.assertTrue(all(len(values) == 0
+                                    for values in _channel_values(obj)))
+
+    def test_read_window(self):
+        # Comtrade.read with multiple sample rates: 1000 Hz up to sample 4,
+        # then 500 Hz
+        for dat_format in ("ASCII", "BINARY"):
+            with self.subTest(format=dat_format):
+                rows = [(n, 0, n % 2) for n in range(1, 7)]
+                if dat_format == "ASCII":
+                    dat = "".join("{0},{1},{0},{2}\n".format(*row) for row in rows)
+                else:
+                    dat = b"".join(struct.pack("<IIhH", n, ts, n, status)
+                                   for n, ts, status in rows)
+                obj = Comtrade(ignore_warnings=True,
+                               use_numpy_arrays=self.use_numpy_arrays)
+                obj.read(COMTRADE_SAMPLE_5_CFG.format(format=dat_format), dat,
+                         start_time=0.0025, end_time=0.006)
+                self.assertEqual(list(obj.analog[0]), [4, 5])
+                self.assertEqual(list(obj.status[0]), [0, 1])
+                for t, expected in zip(obj.time, [0.003, 0.005]):
+                    self.assertAlmostEqual(t, expected, places=6)
+
+
+@unittest.skipUnless(comtrade._HAS_NUMPY, "numpy is not installed")
+class TestTimeWindowLoadingNumpy(TestTimeWindowLoading):
+    use_numpy_arrays = True
+
+
+class TestLazyLoading(unittest.TestCase):
+    """Binary DAT files values decoded when first accessed."""
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        for ext in ("cfg", "dat"):
+            shutil.copy(f"tests/sample_files/sample_bin.{ext}",
+                        os.path.join(self.tmp_dir, f"sample.{ext}"))
+        self.cfg_path = os.path.join(self.tmp_dir, "sample.cfg")
+        self.full = Comtrade(ignore_warnings=True).load(self.cfg_path)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp_dir)
+
+    def test_values(self):
+        with Comtrade(ignore_warnings=True).load(self.cfg_path, lazy=True) as obj:
+            self.assertEqual(len(obj.analog), self.full.analog_count)
+            self.assertEqual(list(obj.time), list(self.full.time))
+            self.assertEqual(_channel_values(obj), _channel_values(self.full))
+
+    def test_decoded_when_accessed(self):
+        with Comtrade(ignore_warnings=True).load(self.cfg_path, lazy=True) as obj:
+            count = len(obj.analog)
+
+            def decoded():
+                return [values is not None for values in obj.analog._values]
+
+            self.assertEqual(decoded(), [False] * count)
+            values = obj.analog[1]
+            self.assertIs(obj.analog[1], values)
+            self.assertEqual(decoded(), [i == 1 for i in range(count)])
+            self.assertIs(obj.analog[-1], obj.analog[count - 1])
+            self.assertEqual(decoded(), [i in (1, count - 1) for i in range(count)])
+            self.assertEqual(list(values), list(self.full.analog[1]))
+
+    def test_slices(self):
+        with Comtrade(ignore_warnings=True).load(self.cfg_path, lazy=True) as obj:
+            self.assertEqual([list(v) for v in obj.status[1:3]],
+                             [list(v) for v in self.full.status[1:3]])
+
+    def test_closed(self):
+        obj = Comtrade(ignore_warnings=True).load(self.cfg_path, lazy=True)
+        first = list(obj.analog[0])
+        obj.close()
+        # values decoded before closing are kept
+        self.assertEqual(list(obj.analog[0]), first)
+        with self.assertRaises(comtrade.ComtradeError):
+            obj.analog[1]
+        # the file is released
+        os.remove(os.path.join(self.tmp_dir, "sample.dat"))
+
+    def test_reload_closes_file(self):
+        obj = Comtrade(ignore_warnings=True).load(self.cfg_path, lazy=True)
+        obj.load("tests/sample_files/sample_ascii.cfg")
+        os.remove(os.path.join(self.tmp_dir, "sample.dat"))
+
+    def test_eager_loading_releases_file(self):
+        Comtrade(ignore_warnings=True).load(self.cfg_path, start_time=0.0)
+        os.remove(os.path.join(self.tmp_dir, "sample.dat"))
+
+    def test_lazy_time_window(self):
+        t = list(self.full.time)
+        with comtrade.load(self.cfg_path, ignore_warnings=True, lazy=True,
+                           start_time=t[1], end_time=t[3]) as obj:
+            self.assertEqual(list(obj.analog[0]), list(self.full.analog[0][1:4]))
+            self.assertEqual(list(obj.status[0]), list(self.full.status[0][1:4]))
+
+    def test_cff(self):
+        full = Comtrade(ignore_warnings=True).load("tests/sample_files/sample_float32.cff")
+        with comtrade.load("tests/sample_files/sample_float32.cff",
+                           ignore_warnings=True, lazy=True) as obj:
+            self.assertIsInstance(obj.analog, comtrade._LazyChannels)
+            self.assertEqual(_channel_values(obj), _channel_values(full))
+
+    def test_ascii_loads_eagerly(self):
+        obj = comtrade.load("tests/sample_files/sample_ascii.cfg",
+                            ignore_warnings=True, lazy=True)
+        self.assertIsInstance(obj.analog, list)
+
+    def test_scaled_values(self):
+        with Comtrade(ignore_warnings=True).load(self.cfg_path, lazy=True) as obj:
+            self.assertEqual([list(v) for v in obj.analog_primary],
+                             [list(v) for v in self.full.analog_primary])
+
+
 if __name__ == "__main__":
     unittest.main()

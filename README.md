@@ -172,6 +172,45 @@ DAT files (`BINARY`, `BINARY32` and `FLOAT32` formats), which are converted with
 operations.
 
 
+#### Loading a time window
+
+Large records can be partially loaded, with only the samples within a time window, in seconds,
+in the same scale of `Comtrade.time` (`start_time` and `end_time` limits are inclusive and
+both are optional):
+
+```python
+import comtrade
+rec = comtrade.load("my_record.cfg", start_time=0.1, end_time=0.3)
+rec.time[0]          # 0.1 (or the first sample after it)
+rec.total_samples    # number of samples within the window
+```
+
+`Comtrade.time` values keep their scale, i.e., the first sample of the window is not at zero.
+Binary DAT files are memory mapped and the window is found with a binary search, so only the
+window's rows are read. ASCII DAT files are read up to the window end. Samples are expected
+to be in time order.
+
+
+#### Lazy loading of binary files
+
+With `lazy=True`, binary DAT files (`BINARY`, `BINARY32` and `FLOAT32` formats, including CFF
+files) are kept memory mapped and the values of each channel are decoded when first accessed.
+This saves time and memory when only some channels of a record with many channels are used.
+Time values are loaded right away. ASCII DAT files are loaded completely, as usual.
+
+```python
+import comtrade
+with comtrade.load("my_record.cfg", lazy=True) as rec:
+    ia = rec.analog[0]   # decoded here
+    trip = rec.status[3]
+```
+
+`Comtrade.analog` and `Comtrade.status` are then sequences (not lists) of channel values. The DAT
+file stays open until `Comtrade.close()` is called, the `with` block ends, or another record is
+loaded into the object. Channels not accessed before closing can't be read anymore. It can be
+combined with `start_time` and `end_time`.
+
+
 #### Replace missing data with `float('nan')`
 
 Missing analog values are replaced with `float('nan')`. The value used to represent missing data varies with the 

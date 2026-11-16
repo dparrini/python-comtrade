@@ -24,15 +24,19 @@
 __version__ = "0.2.1"
 
 import array
+import bisect
+import collections.abc
 import configparser
 import datetime as dt
 import errno
 import io
 import itertools
 import math
+import mmap
 import operator
 import os
 import re
+import struct
 import sys
 from typing import Union
 import warnings
@@ -69,6 +73,9 @@ _EPOCH = dt.datetime(1970, 1, 1)
 
 # Special values
 _TIMESTAMP_MISSING = 0xFFFFFFFF
+
+# DAT file loading options (keyword arguments of Comtrade.load and read)
+_DAT_OPTIONS = ("lazy", "start_time", "end_time")
 
 # CFF headers
 _CFF_HEADER_REXP = r"(?i)--- file type: ([a-z]+)(?:\s+([a-z0-9]+)(?:\s*\:\s*([0-9]+))?)? ---$"
@@ -135,14 +142,20 @@ def _copy_values(target, start: int, values):
     target[start:start + len(values)] = values
 
 
-def _unpack_column(data, row_size: int, offset: int, typecode: str) -> array.array:
+def _unpack_column(data, row_size: int, offset: int, typecode: str,
+                   first_row: int = 0, rows: int = -1) -> array.array:
     """Unpack the little-endian field of typecode at the offset (in bytes) of
-    every row of row_size bytes in data."""
+    rows (all whole rows, if negative) of row_size bytes in data, starting at
+    the row first_row."""
+    if rows < 0:
+        rows = len(data) // row_size - first_row
     size = array.array(typecode).itemsize
-    column = bytearray(len(data) // row_size * size)
+    column = bytearray(rows * size)
+    start = first_row * row_size + offset
+    end = (first_row + rows) * row_size
     # gather each byte of the field from all rows at once
     for k in range(size):
-        column[k::size] = data[offset + k::row_size]
+        column[k::size] = data[start + k:end:row_size]
     values = array.array(typecode, column)
     if sys.byteorder == "big":
         values.byteswap()
@@ -324,6 +337,44 @@ def _to_utc(timestamp: dt.datetime, offset: Union[dt.timedelta, None]) -> Union[
     except OverflowError:
         # placeholder timestamps (missing dates) near datetime.min
         return None
+
+
+def _truncate_values(values, size: int):
+    """Return the first size values (array.array or numpy array)."""
+    if len(values) == size:
+        return values
+    return values[:size]
+
+
+class _LazyChannels(collections.abc.Sequence):
+    """Sequence of channel values decoded when first accessed."""
+
+    def __init__(self, count: int, decode):
+        self._decode = decode
+        self._values = [None] * count
+
+    def __len__(self):
+        return len(self._values)
+
+    def __getitem__(self, index):
+        if isinstance(index, slice):
+            return [self[i] for i in range(*index.indices(len(self)))]
+        values = self._values[index]
+        if values is None:
+            index = range(len(self))[index]
+            values = self._decode(index)
+            self._values[index] = values
+        return values
+
+    def __add__(self, other):
+        # concatenation as lists, such as analog + status
+        return list(self) + list(other)
+
+    def __radd__(self, other):
+        return list(other) + list(self)
+
+    def __repr__(self):
+        return "<{} channels, decoded when first accessed>".format(len(self))
 
 
 def _scale_values(values, factor: float):
@@ -827,10 +878,26 @@ class Comtrade:
         self._hdr = None
         self._inf = None
 
+        # DAT reader of lazy loaded data
+        self._dat_reader = None
+
         if "ignore_warnings" in kwargs:
             self.ignore_warnings = kwargs["ignore_warnings"]
         else:
             self.ignore_warnings = False
+
+    def close(self) -> None:
+        """Close the DAT file of lazy loaded data. Channels not accessed
+        before closing can't be read anymore."""
+        if self._dat_reader is not None:
+            self._dat_reader.close()
+            self._dat_reader = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.close()
 
     @property
     def station_name(self) -> str:
@@ -1061,12 +1128,14 @@ class Comtrade:
             warnings.warn(FutureWarning("digital_count is deprecated, use status_count instead."))
         return self._cfg.status_count
 
-    def _get_dat_reader(self):
+    def _get_dat_reader(self, **kwargs):
         # case-insensitive comparison of file format
         ft_upper = self.ft.upper()
         dat_kwargs = {"use_numpy_arrays": self._use_numpy_arrays,
                       "use_double_precision": self._use_double_precision,
                       "rev_year": self.rev_year}
+        dat_kwargs.update({key: kwargs[key] for key in _DAT_OPTIONS
+                           if key in kwargs})
         if ft_upper == _TYPE_ASCII:
             dat = _AsciiDatReader(**dat_kwargs)
         elif ft_upper == _TYPE_BINARY:
@@ -1079,9 +1148,12 @@ class Comtrade:
             raise ComtradeError("Not supported data file format: {}".format(self.ft))
         return dat
 
-    def read(self, cfg_lines, dat_lines_or_bytes) -> None:
+    def read(self, cfg_lines, dat_lines_or_bytes, **kwargs) -> None:
         """
         Read CFG and DAT files contents. Expects FileIO or StringIO objects.
+
+        Keyword arguments:
+        lazy, start_time, end_time -- DAT loading options, see load().
         """
         self._cfg.read(cfg_lines)
 
@@ -1091,7 +1163,7 @@ class Comtrade:
         # channel phases
         self._cfg_extract_phases(self._cfg)
 
-        dat = self._get_dat_reader()
+        dat = self._get_dat_reader(**kwargs)
         dat.read(dat_lines_or_bytes, self._cfg)
 
         # copy .dat object information
@@ -1112,6 +1184,10 @@ class Comtrade:
         self._total_samples = dat.total_samples
         self._analog_time_values = None
         self._analog_scaled_values = {}
+        # keep the reader of lazy loaded data, to close its file
+        self.close()
+        if dat.is_lazy:
+            self._dat_reader = dat
 
     def _get_skewed_time(self, skew: float):
         """Return the time values shifted by a channel time skew (in microseconds)."""
@@ -1151,16 +1227,25 @@ class Comtrade:
         Keyword arguments:
         inf_file -- optional INF file path (Default = None)
         hdr_file -- optional HDR file path (Default = None)
+        start_time -- load only samples at or after this time, in seconds,
+            in the same scale of the time property (Default = None)
+        end_time -- load only samples at or before this time, in seconds
+            (Default = None)
+        lazy -- for binary DAT files, keep the file memory mapped and decode
+            each channel's values when first accessed. Call close(), or use
+            the object as a context manager, to close the file
+            (Default = False)
         """
         inf_file = kwargs.get("inf_file", None)
         hdr_file = kwargs.get("hdr_file", None)
+        dat_options = {key: kwargs[key] for key in _DAT_OPTIONS if key in kwargs}
 
         # which extension: CFG or CFF?
         file_ext = cfg_file[-3:]
         file_ext_upper = file_ext.upper()
         if file_ext_upper == "CFF":
             # check if the CFF file exists
-            self._load_cff(cfg_file)
+            self._load_cff(cfg_file, **dat_options)
 
         elif file_ext_upper == "CFG":
             basename = cfg_file[:-3]
@@ -1179,7 +1264,7 @@ class Comtrade:
             if "encoding" in kwargs:
                 file_kwargs["encoding"] = kwargs["encoding"]
             self._load_cfg(cfg_file, **file_kwargs)
-            self._load_dat(dat_file)
+            self._load_dat(dat_file, **dat_options)
 
             # Load additional inf and hdr files, if they exist.
             self._load_inf(inf_file, **file_kwargs)
@@ -1199,8 +1284,8 @@ class Comtrade:
         # channel phases
         self._cfg_extract_phases(self._cfg)
 
-    def _load_dat(self, dat_filepath):
-        dat = self._get_dat_reader()
+    def _load_dat(self, dat_filepath, **kwargs):
+        dat = self._get_dat_reader(**kwargs)
         dat.load(dat_filepath, self._cfg)
 
         # copy .dat object information
@@ -1282,11 +1367,11 @@ class Comtrade:
 
             if fformat == _TYPE_ASCII:
                 # process ASCII CFF data
-                self.read("\n".join(cfg_lines), "\n".join(dat_lines))
+                self.read("\n".join(cfg_lines), "\n".join(dat_lines), **kwargs)
             else:
                 # read remaining data as .dat values.
                 dat_bytes = cff_file.read()
-                self.read("\n".join(cfg_lines), dat_bytes)
+                self.read("\n".join(cfg_lines), dat_bytes, **kwargs)
 
         # stores additional data
         self._hdr = "\n".join(hdr_lines)
@@ -1379,12 +1464,20 @@ class AnalogChannel(Channel):
 class _DatReader:
     """Abstract DatReader class. Used to parse DAT file contents."""
     read_mode = "r"
+    # whether the values are allocated before parsing, for all samples
+    preallocate_values = True
 
     def __init__(self, **kwargs):
         """DatReader class constructor."""
         self._use_numpy_arrays = kwargs.get("use_numpy_arrays", False)
         self._use_double_precision = kwargs.get("use_double_precision", False)
         self._rev_year = kwargs.get("rev_year", REV_2013)
+        # loading options
+        self._lazy = kwargs.get("lazy", False)
+        self._start_time = kwargs.get("start_time", None)
+        self._end_time = kwargs.get("end_time", None)
+        # memory mapped DAT file
+        self._mmap = None
 
         self.file_path = ""
         self._content = None
@@ -1406,6 +1499,31 @@ class _DatReader:
         """Return the total samples (per channel)."""
         return self._total_samples
 
+    @property
+    def is_lazy(self) -> bool:
+        """Return whether channel values are decoded when first accessed."""
+        return False
+
+    @property
+    def _has_time_window(self) -> bool:
+        return self._start_time is not None or self._end_time is not None
+
+    def _in_time_window(self, time: float) -> bool:
+        return (self._start_time is None or time >= self._start_time) and \
+            (self._end_time is None or time <= self._end_time)
+
+    def _as_stored_times(self, times: list) -> list:
+        """Return the times rounded to the precision of the time values, so
+        that time window limits taken from them select the same samples."""
+        return list(array.array("d" if self._use_double_precision else "f",
+                                times))
+
+    def close(self):
+        """Close the memory mapped DAT file, if any."""
+        if self._mmap is not None:
+            self._mmap.close()
+            self._mmap = None
+
     def load(self, dat_filepath, cfg, **kwargs):
         """Load a DAT file and parse its contents."""
         self.file_path = dat_filepath
@@ -1414,10 +1532,25 @@ class _DatReader:
             # extract CFG file information regarding data dimensions
             self._cfg = cfg
             self._preallocate()
-            if "encoding" not in kwargs and self.read_mode != "rb":
-                kwargs["encoding"] = "utf-8"
-            with open(self.file_path, self.read_mode, **kwargs) as contents:
-                self.parse(contents)
+            if self.read_mode == "rb":
+                # binary files are memory mapped, so only the needed rows
+                # and fields are read
+                with open(self.file_path, "rb") as file:
+                    if os.fstat(file.fileno()).st_size > 0:
+                        self._mmap = mmap.mmap(file.fileno(), 0,
+                                               access=mmap.ACCESS_READ)
+                try:
+                    self.parse(self._mmap if self._mmap is not None else b"")
+                except BaseException:
+                    self.close()
+                    raise
+                if not self.is_lazy:
+                    self.close()
+            else:
+                if "encoding" not in kwargs:
+                    kwargs["encoding"] = "utf-8"
+                with open(self.file_path, self.read_mode, **kwargs) as contents:
+                    self.parse(contents)
         else:
             raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT),
                                     self.file_path)
@@ -1447,6 +1580,9 @@ class _DatReader:
             if samp != 0.0:
                 start_time += (endsamp - start_n) / samp
             start_n = endsamp
+
+        if not self.preallocate_values:
+            return
 
         # analog and status count
         analog_count = self._cfg.analog_count
@@ -1544,21 +1680,33 @@ class _AsciiDatReader(_DatReader):
         # Lines are read in blocks and the values of each channel in a block
         # are converted at once, which is much faster than one by one.
         block_size = max(1, _ASCII_BLOCK_VALUES // (analog_count + status_count + 2))
+        # rows read and rows stored (only the ones within the time window)
+        rows_read = 0
         irow = 0
-        while irow < self._total_samples:
+        past_window = False
+        while rows_read < self._total_samples and not past_window:
             rows = [line.strip().split(self.ASCII_SEPARATOR) for line in
-                    itertools.islice(lines, min(block_size, self._total_samples - irow))]
+                    itertools.islice(lines, min(block_size, self._total_samples - rows_read))]
             if not rows:
                 break
+            rows_read += len(rows)
 
             # Read time. A missing timestamp is a blank field in ASCII files:
             # 0xFFFFFFFF is the missing marker of binary files only, and a
             # valid decimal timestamp here.
-            _copy_values(self.time, irow, [
-                self._get_time(int(values[0]),
-                               float(values[1]) if values[1].strip() else None,
-                               time_base, time_mult)
-                for values in rows])
+            times = [self._get_time(int(values[0]),
+                                    float(values[1]) if values[1].strip() else None,
+                                    time_base, time_mult)
+                     for values in rows]
+            if self._has_time_window:
+                # samples are in time order: stop after the window end
+                past_window = self._end_time is not None and \
+                    times[-1] > self._end_time
+                times = self._as_stored_times(times)
+                selected = [k for k, t in enumerate(times) if self._in_time_window(t)]
+                rows = [rows[k] for k in selected]
+                times = [times[k] for k in selected]
+            _copy_values(self.time, irow, times)
 
             for i in range(analog_count):
                 ai, bi = a[i], b[i]
@@ -1572,6 +1720,13 @@ class _AsciiDatReader(_DatReader):
                              list(map(int, map(operator.itemgetter(i - status_count), rows))))
 
             irow += len(rows)
+
+        if self._has_time_window:
+            # keep only the samples within the time window
+            self._total_samples = irow
+            self.time = _truncate_values(self.time, irow)
+            self.analog = [_truncate_values(values, irow) for values in self.analog]
+            self.status = [_truncate_values(values, irow) for values in self.status]
 
 
 class _BinaryDatReader(_DatReader):
@@ -1595,6 +1750,8 @@ class _BinaryDatReader(_DatReader):
             self.DATA_MISSING = -32768  # 0x8000
 
         self.read_mode = "rb"
+        # values are allocated when parsed, only for the samples loaded
+        self.preallocate_values = False
 
     def _get_analog_values(self, yint, a: float, b: float):
         """Return the analog values a * yint + b of the raw values yint,
@@ -1615,19 +1772,24 @@ class _BinaryDatReader(_DatReader):
             return (numpy.asarray(group) >> chnindex) & 1
         return [(word >> chnindex) & 1 for word in group]
 
+    @property
+    def is_lazy(self) -> bool:
+        return self._lazy
+
+    def close(self):
+        """Close the DAT file contents. Channel values not decoded yet can't
+        be read anymore."""
+        self._contents = None
+        super().close()
+
     def parse(self, contents):
         """Parse DAT binary file contents."""
         time_mult = self._cfg.timemult
         time_base = self._cfg.time_base
         achannels = self._cfg.analog_count
-        schannel = self._cfg.status_count
+        schannels = self._cfg.status_count
 
-        # auxillary vectors (channels gains and offsets)
-        a = [x.a for x in self._cfg.analog_channels]
-        b = [x.b for x in self._cfg.analog_channels]
-
-        dbytes = self.STATUS_BYTES * math.ceil(schannel / 16.0)
-        groups_of_16bits = math.floor(dbytes / self.STATUS_BYTES)
+        dbytes = self.STATUS_BYTES * math.ceil(schannels / 16.0)
 
         if isinstance(contents, io.TextIOBase) or \
                 isinstance(contents, io.BufferedIOBase):
@@ -1640,40 +1802,92 @@ class _BinaryDatReader(_DatReader):
         row_size = self.SAMPLE_NUMBER_BYTES + self.TIME_BYTES + \
             achannels * self.ANALOG_BYTES + dbytes
         rows = min(len(contents) // row_size, self.total_samples)
-        contents = contents[:rows * row_size]
+
+        def get_time(n: int, ts_val: int) -> float:
+            # 0xFFFFFFFF marks a missing timestamp in binary files
+            return self._get_time(n, ts_val if ts_val != _TIMESTAMP_MISSING else None,
+                                  time_base, time_mult)
+
+        # rows to decode: the ones within the time window, or all of them
+        # (samples missing in the DAT file have zero values)
+        first_row = 0
+        if self._has_time_window:
+            # samples are in time order: binary search the window limits,
+            # reading only the time of a few rows
+            row_time_struct = struct.Struct("<II")
+
+            def row_time(k: int) -> float:
+                return self._as_stored_times(
+                    [get_time(*row_time_struct.unpack_from(contents, k * row_size))])[0]
+
+            end_row = rows
+            if self._start_time is not None:
+                first_row = bisect.bisect_left(range(rows), self._start_time,
+                                               key=row_time)
+            if self._end_time is not None:
+                end_row = bisect.bisect_right(range(rows), self._end_time,
+                                              lo=first_row, key=row_time)
+            rows = max(0, end_row - first_row)
+            self._total_samples = rows
 
         # Each field is unpacked from all rows at once, which is much faster
         # than unpacking the rows one by one.
-        sample_numbers = _unpack_column(contents, row_size, 0, "I")
+        sample_numbers = _unpack_column(contents, row_size, 0, "I", first_row, rows)
         timestamps = _unpack_column(contents, row_size,
-                                    self.SAMPLE_NUMBER_BYTES, "I")
-        # 0xFFFFFFFF marks a missing timestamp in binary files
-        _copy_values(self.time, 0, [
-            self._get_time(n, ts_val if ts_val != _TIMESTAMP_MISSING else None,
-                           time_base, time_mult)
-            for n, ts_val in zip(sample_numbers, timestamps)])
+                                    self.SAMPLE_NUMBER_BYTES, "I", first_row, rows)
+        times = [get_time(n, ts_val) for n, ts_val in zip(sample_numbers, timestamps)]
+        self._contents = contents
+        self._row_size = row_size
+        self._first_row = first_row
+        self._rows = rows
 
-        # Extract analog channel values.
-        offset = self.SAMPLE_NUMBER_BYTES + self.TIME_BYTES
-        for ichannel in range(achannels):
-            yint = _unpack_column(contents, row_size, offset,
-                                  self.ANALOG_TYPECODE)
-            _copy_values(self.analog[ichannel], 0,
-                         self._get_analog_values(yint, a[ichannel], b[ichannel]))
-            offset += self.ANALOG_BYTES
+        self.time = _preallocate_values(
+            "d" if self._use_double_precision else "f",
+            self._total_samples,
+            self._use_numpy_arrays,
+        )
+        _copy_values(self.time, 0, times)
 
-        # Extract status channel values.
-        for igroup in range(groups_of_16bits):
-            group = _unpack_column(contents, row_size, offset,
-                                   self.STATUS_TYPECODE)
+        if self._lazy:
+            self.analog = _LazyChannels(achannels, self._decode_analog)
+            self.status = _LazyChannels(schannels, self._decode_status)
+        else:
+            self.analog = [self._decode_analog(i) for i in range(achannels)]
+            self.status = [self._decode_status(i) for i in range(schannels)]
+            self._contents = None
 
-            # for each group of 16 bits, extract the status channels
-            maxchn = min((igroup + 1) * 16, schannel)
-            for ichannel in range(igroup * 16, maxchn):
-                chnindex = ichannel - igroup * 16
-                _copy_values(self.status[ichannel], 0,
-                             self._get_status_values(group, chnindex))
-            offset += self.STATUS_BYTES
+    def _unpack(self, offset: int, typecode: str):
+        """Unpack the field at offset of the rows to decode."""
+        if self._contents is None:
+            raise ComtradeError("The DAT file is closed.")
+        return _unpack_column(self._contents, self._row_size, offset,
+                              typecode, self._first_row, self._rows)
+
+    def _decode_analog(self, ichannel: int):
+        """Return the values of the analog channel ichannel."""
+        channel = self._cfg.analog_channels[ichannel]
+        offset = self.SAMPLE_NUMBER_BYTES + self.TIME_BYTES + \
+            ichannel * self.ANALOG_BYTES
+        yint = self._unpack(offset, self.ANALOG_TYPECODE)
+        values = _preallocate_values(
+            "d" if self._use_double_precision else "f",
+            self._total_samples,
+            self._use_numpy_arrays,
+        )
+        _copy_values(values, 0, self._get_analog_values(yint, channel.a, channel.b))
+        return values
+
+    def _decode_status(self, ichannel: int):
+        """Return the values of the status channel ichannel."""
+        igroup, chnindex = divmod(ichannel, 16)
+        offset = self.SAMPLE_NUMBER_BYTES + self.TIME_BYTES + \
+            self._cfg.analog_count * self.ANALOG_BYTES + \
+            igroup * self.STATUS_BYTES
+        group = self._unpack(offset, self.STATUS_TYPECODE)
+        values = _preallocate_values("i", self._total_samples,
+                                     self._use_numpy_arrays)
+        _copy_values(values, 0, self._get_status_values(group, chnindex))
+        return values
 
 
 class _Binary32DatReader(_BinaryDatReader):
