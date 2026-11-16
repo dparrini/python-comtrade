@@ -1685,7 +1685,9 @@ class _AsciiDatReader(_DatReader):
         irow = 0
         past_window = False
         while rows_read < self._total_samples and not past_window:
-            rows = [line.strip().split(self.ASCII_SEPARATOR) for line in
+            # <sub> (0x1A) may appear appended to the end of text files on
+            # some platforms, as in the CFG and INF files
+            rows = [_eof_strip(line).split(self.ASCII_SEPARATOR) for line in
                     itertools.islice(lines, min(block_size, self._total_samples - rows_read))]
             if not rows:
                 break
