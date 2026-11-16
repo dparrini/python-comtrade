@@ -1654,8 +1654,11 @@ class Comtrade:
         # the start timestamp) not starting at zero move it.
         start_ns = cfg.start_timestamp_ns
         trigger_ns = cfg.trigger_timestamp_ns
-        nanoseconds = cfg.time_base < Cfg.TIME_BASE_MICRO_SEC or \
-            start_ns % 1000 != 0 or trigger_ns % 1000 != 0
+        # The 1999 revision time stamps have a resolution of 1 microsecond;
+        # the nanoseconds resolution is only available in later revisions.
+        nanoseconds = rev_year != REV_1999 and (
+            cfg.time_base < Cfg.TIME_BASE_MICRO_SEC or
+            start_ns % 1000 != 0 or trigger_ns % 1000 != 0)
         unit_ns = 1 if nanoseconds else 1000
         first_time = times[0] if count else 0.0
         if first_time != 0.0:

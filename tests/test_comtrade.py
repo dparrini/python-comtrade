@@ -1967,6 +1967,28 @@ class TestSaving(unittest.TestCase):
         self.assertEqual((saved.cfg.time_code, saved.cfg.local_code), ("-3h30", "+2"))
         self.assertEqual((saved.cfg.tmq_code, saved.cfg.leap_second), (10, 1))
 
+    def test_1999_microsecond_timestamps(self):
+        # the 1999 revision has a 1 microsecond time stamp resolution
+        cfg_text = COMTRADE_SAMPLE_3_CFG.format(samples=2, seconds=0.000001500,
+                                                format="BINARY")
+        cfg_text = cfg_text + "-3h30,+2\nA,1\n"
+        obj = Comtrade(ignore_warnings=True)
+        obj.read(cfg_text, b"".join(struct.pack("<IIhH", n, ts, 0, 0)
+                                    for n, ts in ((1, 0), (2, 1500))))
+        obj.save(self.path("saved.cfg"), ft="BINARY", rev_year="1999")
+        with open(self.path("saved.cfg")) as file:
+            lines = file.read().splitlines()
+        for line in lines[7:9]:
+            self.assertRegex(
+                line, r"^[0-9]{2}/[0-9]{2}/[0-9]{4},[0-9]{2}:[0-9]{2}:[0-9]{2}"
+                      r"\.[0-9]{6}$")
+        saved = comtrade.load(self.path("saved.cfg"), ignore_warnings=True)
+        self.assertEqual(saved.rev_year, "1999")
+        self.assertEqual(saved.time_base,
+                         Comtrade(ignore_warnings=True).cfg.TIME_BASE_MICRO_SEC)
+        # the 1.5 microseconds time stamp is rounded to the time base
+        self.assertEqual([round(t, 6) for t in saved.time], [0.0, 0.000002])
+
     def test_hdr_and_inf(self):
         obj = comtrade.load("tests/sample_files/sample_ascii.cff", ignore_warnings=True)
         obj._inf = "[Public Record_Information]\nSource=Test"
