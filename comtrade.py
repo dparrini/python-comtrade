@@ -64,6 +64,9 @@ _TYPE_BINARY = "BINARY"
 _TYPE_BINARY32 = "BINARY32"
 _TYPE_FLOAT32 = "FLOAT32"
 
+# Reference of integer timestamps (naive, as numpy.datetime64)
+_EPOCH = dt.datetime(1970, 1, 1)
+
 # Special values
 _TIMESTAMP_MISSING = 0xFFFFFFFF
 
@@ -83,8 +86,18 @@ _re_time = re.compile(r"([0-9]{1,2}):([0-9]{2}):([0-9]{1,2})(.([0-9]{1,12}))?")
 # Non-standard revision warning
 _WARNING_UNKNOWN_REVISION = "Unknown standard revision \"{}\""
 # Date time with nanoseconds resolution warning
-_WARNING_DATETIME_NANO = "Unsupported datetime objects with nanoseconds \
-resolution. Using truncated values."
+_WARNING_DATETIME_NANO = "datetime objects don't support nanoseconds \
+resolution, start_timestamp and trigger_timestamp are truncated to \
+microseconds. Use start_timestamp_ns and trigger_timestamp_ns for full \
+resolution."
+# Status channel without normal state
+_WARNING_MISSING_NORMAL_STATE = "Missing normal state (y) of status channel \
+{}. Using 0."
+# Analog channel without valid ratio information
+_WARNING_INVALID_RATIO = "Invalid ratio information of analog channel {} \
+(primary={}, secondary={}, PS=\"{}\"). Values are not scaled."
+# Unrecognized time of a timestamp
+_WARNING_INVALID_TIME = "Invalid time \"{}\". Using 00:00:00."
 # Date time with year 0, month 0 and/or day 0.
 _WARNING_MIN_DATE = "Missing date values. Using minimum values: {}."
 # Invalid 2013 revision time information fields
@@ -153,30 +166,33 @@ def _get_date(date_str: str) -> tuple:
     return 0, 0, 0
 
 
+def _parse_time(time_str: str, ignore_warnings: bool = False) -> tuple:
+    """Return the hour, minute, second, nanosecond and whether the fraction of
+    seconds has nanoseconds resolution (more than 6 digits) of a time string.
+    Digits beyond nanoseconds are ignored."""
+    m = _re_time.match(time_str.strip())
+    if m is None:
+        if not ignore_warnings:
+            warnings.warn(Warning(_WARNING_INVALID_TIME.format(time_str)))
+        return 0, 0, 0, 0, False
+    hour = int(m.group(1))
+    minute = int(m.group(2))
+    second = int(m.group(3))
+    frac_sec_str = m.group(5) or ""
+    in_nanoseconds = len(frac_sec_str) > 6
+    nanosecond = int(fill_with_zeros_to_the_right(frac_sec_str[:9], 9))
+    return hour, minute, second, nanosecond, in_nanoseconds
+
+
 def _get_time(time_str: str, ignore_warnings: bool = False) -> tuple:
-    m = _re_time.match(time_str)
-    if m is not None:
-        hour = int(m.group(1))
-        minute = int(m.group(2))
-        second = int(m.group(3))
-        frac_sec_str = m.group(5)
-        # Pad fraction of seconds with 0s to the right
-        if len(frac_sec_str) <= 6:
-            frac_sec_str = fill_with_zeros_to_the_right(frac_sec_str, 6)
-        else:
-            frac_sec_str = fill_with_zeros_to_the_right(frac_sec_str, 9)
-
-        frac_second = int(frac_sec_str)
-        in_nanoseconds = len(frac_sec_str) > 6
-        microsecond = frac_second
-
-        if in_nanoseconds:
-            # Nanoseconds resolution is not supported by datetime module, so it's
-            # converted to integer below.
-            if not ignore_warnings:
-                warnings.warn(Warning(_WARNING_DATETIME_NANO))
-            microsecond = int(microsecond * 1E-3)
-        return hour, minute, second, microsecond, in_nanoseconds
+    """Return the hour, minute, second, microsecond (truncated) and whether
+    the fraction of seconds has nanoseconds resolution of a time string."""
+    hour, minute, second, nanosecond, in_nanoseconds = _parse_time(
+        time_str, ignore_warnings)
+    if in_nanoseconds and not ignore_warnings:
+        # Nanoseconds resolution is not supported by datetime module
+        warnings.warn(Warning(_WARNING_DATETIME_NANO))
+    return hour, minute, second, nanosecond // 1000, in_nanoseconds
 
 
 def fill_with_zeros_to_the_right(number_str: str, width: int):
@@ -203,11 +219,12 @@ def _get_same_case(original_ext: str, other_ext: str) -> str:
 
 
 def _read_timestamp(timestamp_line: str, rev_year: str, ignore_warnings: bool = False) -> tuple:
-    """Process comma separated fields and returns a tuple containing the timestamp
-    and a boolean value indicating whether nanoseconds are used.
+    """Process comma separated fields and returns a tuple containing the timestamp,
+    a boolean value indicating whether nanoseconds are used, and the nanoseconds
+    truncated from the timestamp (0 to 999).
     Can possibly return the timestamp 00/00/0000 00:00:00.000 for empty strings
     or empty pairs."""
-    day, month, year, hour, minute, second, microsecond = (0,) * 7
+    day, month, year, hour, minute, second, nanosecond = (0,) * 7
     nano_sec = False
     if len(timestamp_line.strip()) > 0:
         values = _read_sep_values(timestamp_line, 2)
@@ -221,8 +238,10 @@ def _read_timestamp(timestamp_line: str, rev_year: str, ignore_warnings: bool = 
                 else:
                     day, month, year = _get_date(date_str)
             if len(time_str.strip()) > 0:
-                hour, minute, second, microsecond, \
-                    nano_sec = _get_time(time_str, ignore_warnings)
+                hour, minute, second, nanosecond, \
+                    nano_sec = _parse_time(time_str, ignore_warnings)
+                if nano_sec and not ignore_warnings:
+                    warnings.warn(Warning(_WARNING_DATETIME_NANO))
 
     using_min_data = False
     if year <= 0:
@@ -237,10 +256,17 @@ def _read_timestamp(timestamp_line: str, rev_year: str, ignore_warnings: bool = 
     # Timezone info unsupported
     tzinfo = None
     timestamp = dt.datetime(year, month, day, hour, minute, second,
-                            microsecond, tzinfo)
+                            nanosecond // 1000, tzinfo)
     if not ignore_warnings and using_min_data:
         warnings.warn(Warning(_WARNING_MIN_DATE.format(str(timestamp))))
-    return timestamp, nano_sec
+    return timestamp, nano_sec, nanosecond % 1000
+
+
+def _timestamp_ns(timestamp: dt.datetime, nanosecond: int) -> int:
+    """Return a naive timestamp, plus nanoseconds, as an integer number of
+    nanoseconds since 1970-01-01 00:00:00 (the same time zone)."""
+    microseconds = (timestamp - _EPOCH) // dt.timedelta(microseconds=1)
+    return microseconds * 1000 + nanosecond
 
 
 def _parse_time_code(time_code: str, ignore_warnings: bool = False) -> Union[dt.timedelta, None]:
@@ -300,6 +326,15 @@ def _to_utc(timestamp: dt.datetime, offset: Union[dt.timedelta, None]) -> Union[
         return None
 
 
+def _scale_values(values, factor: float):
+    """Return the values (array.array or numpy array) multiplied by factor."""
+    if factor == 1.0:
+        return values
+    if _HAS_NUMPY and isinstance(values, numpy.ndarray):
+        return values * factor
+    return array.array(values.typecode, [v * factor for v in values])
+
+
 def _eof_strip(line: str) -> str:
     """Strip line of whitespace and <sub> (0x1A) control character that may appear
      appended to the end of text files on some platforms."""
@@ -345,6 +380,9 @@ class Cfg:
         self._timestamp_critical = False
         self._start_timestamp = dt.datetime(1900, 1, 1)
         self._trigger_timestamp = dt.datetime(1900, 1, 1)
+        # nanoseconds truncated from the timestamps above (0 to 999)
+        self._start_nanosecond = 0
+        self._trigger_nanosecond = 0
         self._ft = _TYPE_ASCII
         self._time_multiplier = 1.0
         # 2013 standard revision information (empty strings or None when
@@ -441,6 +479,21 @@ class Cfg:
     def trigger_timestamp(self) -> dt.datetime:
         """Return the trigger time stamp as a datetime object."""
         return self._trigger_timestamp
+
+    @property
+    def start_timestamp_ns(self) -> int:
+        """Return the recording start time stamp, with nanoseconds resolution,
+        as the number of nanoseconds since 1970-01-01 00:00:00 (in the time
+        zone of the file timestamps). It can be converted with
+        numpy.datetime64(value, "ns") or pandas.Timestamp(value)."""
+        return _timestamp_ns(self._start_timestamp, self._start_nanosecond)
+
+    @property
+    def trigger_timestamp_ns(self) -> int:
+        """Return the trigger time stamp, with nanoseconds resolution, as the
+        number of nanoseconds since 1970-01-01 00:00:00 (in the time zone of
+        the file timestamps)."""
+        return _timestamp_ns(self._trigger_timestamp, self._trigger_nanosecond)
 
     @property
     def nrates(self) -> int:
@@ -589,10 +642,12 @@ class Cfg:
         # Analog channel description lines
         for ichn in range(self._analog_count):
             line = cfg.readline()
-            packed = _read_sep_values(line, 13, '0')
+            packed = _read_sep_values(line, 10, '0')
             # unpack values
-            n, name, ph, ccbm, uu, a, b, skew, cmin, cmax, \
-                primary, secondary, pors = packed
+            n, name, ph, ccbm, uu, a, b, skew, cmin, cmax = packed[:10]
+            # primary, secondary and PS fields (1999 revision and later)
+            primary, secondary, pors = \
+                (list(_read_sep_values(line)) + [''] * 3)[10:13]
             # type conversion
             n = int(n)
             a = float(a)
@@ -600,8 +655,9 @@ class Cfg:
             skew = _prevent_null(skew, float, 0.0)
             cmin = float(cmin)
             cmax = float(cmax)
-            primary = float(primary)
-            secondary = float(secondary)
+            primary = _prevent_null(primary, float, 1.0)
+            secondary = _prevent_null(secondary, float, 1.0)
+            pors = pors if pors else 'P'
             self.analog_channels[ichn] = AnalogChannel(n, a, b, skew,
                                                        cmin, cmax, name, uu, ph, ccbm, primary, secondary, pors)
             line_count = line_count + 1
@@ -610,11 +666,18 @@ class Cfg:
         for ichn in range(self._status_count):
             line = cfg.readline()
             # unpack values
-            packed = _read_sep_values(line, 5, '0')
-            n, name, ph, ccbm, y = packed
+            values = _read_sep_values(line)
+            if len(values) == 3:
+                # 1991 revision: n,ch_id,y
+                n, name, y = values
+                ph, ccbm = '', ''
+            else:
+                n, name, ph, ccbm, y = _read_sep_values(line, 5, '')
             # type conversion
             n = int(n)
-            y = _prevent_null(y, int, 0)  # TODO: actually a critical data. In the future add a warning.
+            if len(y) == 0 and not self._ignore_warnings:
+                warnings.warn(Warning(_WARNING_MISSING_NORMAL_STATE.format(n)))
+            y = _prevent_null(y, int, 0)
             self.status_channels[ichn] = StatusChannel(n, name, ph, ccbm, y)
             line_count = line_count + 1
 
@@ -647,7 +710,7 @@ class Cfg:
         # First data point time and time base
         line = cfg.readline()
         ts_str = line.strip()
-        self._start_timestamp, nanosec = _read_timestamp(
+        self._start_timestamp, nanosec, self._start_nanosecond = _read_timestamp(
             ts_str,
             self.rev_year,
             self._ignore_warnings
@@ -658,7 +721,7 @@ class Cfg:
         # Event data point and time base
         line = cfg.readline()
         ts_str = line.strip()
-        self._trigger_timestamp, nanosec = _read_timestamp(
+        self._trigger_timestamp, nanosec, self._trigger_nanosecond = _read_timestamp(
             ts_str,
             self.rev_year,
             self._ignore_warnings
@@ -756,6 +819,9 @@ class Comtrade:
         # time values of each analog channel, with the channel time skew
         # (computed when first accessed)
         self._analog_time_values = None
+        # analog values in primary and secondary units (computed when first
+        # accessed)
+        self._analog_scaled_values = {}
 
         # Additional CFF data (or additional comtrade files)
         self._hdr = None
@@ -853,6 +919,43 @@ class Comtrade:
         return self._analog_time_values
 
     @property
+    def analog_primary(self) -> list:
+        """Return the analog channel values in primary units (such as the
+        power system voltages and currents), using each channel's primary
+        and secondary ratio information."""
+        return self._get_analog_scaled("P")
+
+    @property
+    def analog_secondary(self) -> list:
+        """Return the analog channel values in secondary units (such as the
+        VT and CT outputs), using each channel's primary and secondary ratio
+        information."""
+        return self._get_analog_scaled("S")
+
+    def _get_analog_scaled(self, side: str) -> list:
+        if side not in self._analog_scaled_values:
+            self._analog_scaled_values[side] = [
+                _scale_values(values, self._get_ratio_factor(channel, side))
+                for channel, values in zip(self._cfg.analog_channels,
+                                           self._analog_values)]
+        return self._analog_scaled_values[side]
+
+    def _get_ratio_factor(self, channel, side: str) -> float:
+        """Return the factor to convert the channel values to the side ("P"
+        or "S") units."""
+        pors = channel.pors.strip().upper()
+        if pors == side:
+            return 1.0
+        if pors in ("P", "S") and channel.primary > 0 and channel.secondary > 0:
+            if side == "P":
+                return channel.primary / channel.secondary
+            return channel.secondary / channel.primary
+        if not self.ignore_warnings:
+            warnings.warn(Warning(_WARNING_INVALID_RATIO.format(
+                channel.n, channel.primary, channel.secondary, channel.pors)))
+        return 1.0
+
+    @property
     def analog(self) -> list:
         """Return the analog channel values bidimensional list."""
         return self._analog_values
@@ -910,13 +1013,21 @@ class Comtrade:
         return self._cfg.status_count
 
     @property
+    def start_timestamp_ns(self) -> int:
+        """Return the recording start time stamp, with nanoseconds resolution,
+        as the number of nanoseconds since 1970-01-01 00:00:00."""
+        return self._cfg.start_timestamp_ns
+
+    @property
+    def trigger_timestamp_ns(self) -> int:
+        """Return the trigger time stamp, with nanoseconds resolution, as the
+        number of nanoseconds since 1970-01-01 00:00:00."""
+        return self._cfg.trigger_timestamp_ns
+
+    @property
     def trigger_time(self) -> float:
         """Return relative trigger time in seconds."""
-        stt = self._cfg.start_timestamp
-        trg = self._cfg.trigger_timestamp
-        tdiff = trg - stt
-        tsec = (tdiff.days * 60 * 60 * 24) + tdiff.seconds + (tdiff.microseconds * 1E-6)
-        return tsec
+        return (self._cfg.trigger_timestamp_ns - self._cfg.start_timestamp_ns) * 1E-9
 
     @property
     def time_base(self) -> float:
@@ -1000,6 +1111,7 @@ class Comtrade:
         self._status_values = dat.status
         self._total_samples = dat.total_samples
         self._analog_time_values = None
+        self._analog_scaled_values = {}
 
     def _get_skewed_time(self, skew: float):
         """Return the time values shifted by a channel time skew (in microseconds)."""

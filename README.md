@@ -75,6 +75,12 @@ The module function `load` must be called with the `CFF` file path specified.
 
 Analog channels may have a time skew (in microseconds) from the start of the sample period, which is not included in `Comtrade.time`. The list `Comtrade.analog_time` stores the time values of each analog channel, with its skew, in seconds, i.e., `Comtrade.analog_time[0]` for `Comtrade.analog[0]`.
 
+`Comtrade.analog` values are in the units recorded in the file, which may be primary (power system)
+or secondary (VT and CT outputs) values, as indicated by each analog channel's `pors` field.
+`Comtrade.analog_primary` and `Comtrade.analog_secondary` lists store the analog values converted
+to primary or secondary units, respectively, using each channel's `primary` and `secondary` ratio
+information. Channels with invalid ratio information are not converted (with a warning).
+
 More information can be accessed through `Comtrade.cfg` object, which stores data such as detailed channel information.
 
 Data of additional sections, such as HDR and INF, can be accessed through `hdr` and `inf` properties, respectively.
@@ -134,9 +140,20 @@ Feel free to pull requests implementing one of these unsupported features or fix
 | Nanoseconds scale                                     |      |      | x    | x    | x               |
 
 
-### Unsupported features
+### Nanoseconds timestamps
 
-* Nanoseconds time base within Python's `datetime` objects (such as `start_timestamp` and `trigger_timestamp` properties). It warns the user but doesn't use it, truncating the numbers.
+Python's `datetime` objects don't support nanoseconds, so `start_timestamp` and `trigger_timestamp`
+are truncated to microseconds (with a warning) when the CFG file uses a nanoseconds time base.
+`start_timestamp_ns` and `trigger_timestamp_ns` hold the full resolution timestamps as the integer
+number of nanoseconds since `1970-01-01 00:00:00` (in the time zone of the file timestamps), which
+can be converted to `numpy` or `pandas` types. `trigger_time` uses them.
+
+```python
+import numpy as np
+import pandas as pd
+np.datetime64(rec.trigger_timestamp_ns, "ns")
+pd.Timestamp(rec.trigger_timestamp_ns)
+```
 
 
 ### Additional settings and features

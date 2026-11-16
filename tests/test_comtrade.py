@@ -5,6 +5,7 @@ import shutil
 import struct
 import tempfile
 import unittest
+import warnings
 from unittest import mock
 import comtrade
 from comtrade import Comtrade
@@ -993,6 +994,165 @@ class TestInfSections(unittest.TestCase):
         self.assertIsNone(obj.inf_sections())
         cff = Comtrade(ignore_warnings=True).load("tests/sample_files/sample_ascii.cff")
         self.assertIsNone(cff.inf_sections())
+
+
+COMTRADE_SAMPLE_1991_CFG = """STATION_NAME,EQUIPMENT
+3,2A,1D
+1,IA,A,LINE,A,2,0,0,-32767,32767
+2,VA,A,LINE,kV,1,0,0,-32767,32767
+1,TRIP,1
+60
+1
+1000,2
+01/02/2000,10:30:00.000000
+01/02/2000,10:30:00.001000
+ASCII
+"""
+
+COMTRADE_SAMPLE_RATIO_CFG = """STATION_NAME,EQUIPMENT,1999
+4,4A,0D
+1,IA_P,A,,A,1,0,0,-32767,32767,1000,5,P
+2,IA_S,A,,A,1,0,0,-32767,32767,1000,5,s
+3,VA_S,A,,V,1,0,0,-32767,32767,0,0,S
+4,FREQ,,,Hz,1,0,0,-32767,32767,,,
+60
+1
+1000,2
+01/02/2000,10:30:00.000000
+01/02/2000,10:30:00.001000
+ASCII
+1
+"""
+
+COMTRADE_SAMPLE_RATIO_DAT = "1,0,10,10,10,60\n2,1000,-20,-20,-20,61\n"
+
+
+class TestChannelLines(unittest.TestCase):
+    """Analog and status channel lines of different revisions."""
+    def test_1991_channels(self):
+        obj = Comtrade(ignore_warnings=True)
+        obj.read(COMTRADE_SAMPLE_1991_CFG, "1,0,1,2,1\n2,1000,3,4,0\n")
+        self.assertEqual(obj.rev_year, "1991")
+        status = obj.cfg.status_channels[0]
+        self.assertEqual((status.n, status.name, status.ph, status.ccbm, status.y),
+                         (1, "TRIP", "", "", 1))
+        analog = obj.cfg.analog_channels[0]
+        self.assertEqual((analog.primary, analog.secondary, analog.pors),
+                         (1.0, 1.0, "P"))
+        # without ratio information, values are not scaled
+        self.assertEqual(list(obj.analog_secondary[0]), list(obj.analog[0]))
+
+    def test_missing_normal_state_warning(self):
+        cfg_text = COMTRADE_SAMPLE_1_CFG.replace("Diff Trip A     ,,,0",
+                                                 "Diff Trip A     ,,,")
+        obj = Comtrade()
+        with self.assertWarns(Warning) as context:
+            obj.read(cfg_text, COMTRADE_SAMPLE_1_DAT)
+        self.assertIn("status channel 1", str(context.warning))
+        self.assertEqual(obj.cfg.status_channels[0].y, 0)
+
+    def test_normal_state(self):
+        obj = Comtrade()
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            obj.read(COMTRADE_SAMPLE_1_CFG, COMTRADE_SAMPLE_1_DAT)
+        self.assertEqual(obj.cfg.status_channels[0].y, 0)
+
+
+class TestAnalogScaling(unittest.TestCase):
+    """Analog values in primary and secondary units."""
+    use_numpy_arrays = False
+
+    def setUp(self):
+        self.obj = Comtrade(ignore_warnings=True,
+                            use_numpy_arrays=self.use_numpy_arrays)
+        self.obj.read(COMTRADE_SAMPLE_RATIO_CFG, COMTRADE_SAMPLE_RATIO_DAT)
+
+    def test_primary(self):
+        primary = self.obj.analog_primary
+        self.assertEqual(list(primary[0]), [10, -20])
+        self.assertEqual(list(primary[1]), [2000, -4000])
+        # invalid ratio: unscaled values
+        self.assertEqual(list(primary[2]), [10, -20])
+        self.assertEqual(list(primary[3]), [60, 61])
+
+    def test_secondary(self):
+        secondary = self.obj.analog_secondary
+        for value, expected in zip(secondary[0], [0.05, -0.1]):
+            self.assertAlmostEqual(value, expected, places=6)
+        self.assertEqual(list(secondary[1]), [10, -20])
+        self.assertEqual(list(secondary[2]), [10, -20])
+        self.assertEqual(list(secondary[3]), [60, 61])
+
+    def test_array_types(self):
+        for values in self.obj.analog_primary + self.obj.analog_secondary:
+            self.assertIs(type(values), type(self.obj.analog[0]))
+
+    def test_cached(self):
+        self.assertIs(self.obj.analog_primary, self.obj.analog_primary)
+        self.obj.read(COMTRADE_SAMPLE_1_CFG, COMTRADE_SAMPLE_1_DAT)
+        self.assertEqual(len(self.obj.analog_primary), 1)
+
+    def test_invalid_ratio_warning(self):
+        obj = Comtrade()
+        obj.read(COMTRADE_SAMPLE_RATIO_CFG, COMTRADE_SAMPLE_RATIO_DAT)
+        with self.assertWarns(Warning) as context:
+            obj.analog_primary
+        self.assertIn("analog channel 3", str(context.warning))
+
+
+@unittest.skipUnless(comtrade._HAS_NUMPY, "numpy is not installed")
+class TestAnalogScalingNumpy(TestAnalogScaling):
+    use_numpy_arrays = True
+
+
+class TestNanosecondTimestamps(unittest.TestCase):
+    """Timestamps with nanoseconds resolution."""
+    def test_time_without_fraction(self):
+        self.assertEqual(comtrade._get_time("10:30:00"), (10, 30, 0, 0, False))
+
+    def test_invalid_time(self):
+        with self.assertWarns(Warning):
+            self.assertEqual(comtrade._get_time("abc"), (0, 0, 0, 0, False))
+
+    def test_extra_digits(self):
+        hour, minute, second, nanosecond, in_nanoseconds = \
+            comtrade._parse_time("00:00:01.123456789123", True)
+        self.assertEqual((second, nanosecond, in_nanoseconds), (1, 123456789, True))
+
+    def test_nanoseconds_warning(self):
+        with self.assertWarns(Warning):
+            comtrade._read_timestamp("01/01/2019,00:00:00.000000001", "2013")
+
+    def test_timestamps_ns(self):
+        cfg_text = COMTRADE_SAMPLE_3_CFG.format(samples=2, seconds=0.000001500,
+                                                format="ASCII")
+        obj = Comtrade(ignore_warnings=True)
+        obj.read(cfg_text, "1,0,1,0\n2,1,2,1\n")
+        self.assertEqual(obj.time_base, obj.cfg.TIME_BASE_NANO_SEC)
+        start_ns = (dt.datetime(2019, 1, 1) - dt.datetime(1970, 1, 1)) \
+            // dt.timedelta(microseconds=1) * 1000
+        self.assertEqual(obj.start_timestamp_ns, start_ns)
+        self.assertEqual(obj.trigger_timestamp_ns, start_ns + 1500)
+        # datetime objects are truncated
+        self.assertEqual(obj.trigger_timestamp.microsecond, 1)
+        self.assertAlmostEqual(obj.trigger_time, 1.5E-6, places=15)
+
+    def test_microseconds_timestamps_ns(self):
+        obj = Comtrade(ignore_warnings=True)
+        obj.read(COMTRADE_SAMPLE_1_CFG, COMTRADE_SAMPLE_1_DAT)
+        self.assertEqual(obj.trigger_timestamp_ns - obj.start_timestamp_ns,
+                         494000000)
+        self.assertAlmostEqual(obj.trigger_time, 0.494)
+
+    @unittest.skipUnless(comtrade._HAS_NUMPY, "numpy is not installed")
+    def test_numpy_datetime64(self):
+        cfg_text = COMTRADE_SAMPLE_3_CFG.format(samples=2, seconds=0.000001500,
+                                                format="ASCII")
+        obj = Comtrade(ignore_warnings=True)
+        obj.read(cfg_text, "1,0,1,0\n2,1,2,1\n")
+        value = comtrade.numpy.datetime64(obj.trigger_timestamp_ns, "ns")
+        self.assertEqual(str(value), "2019-01-01T00:00:00.000001500")
 
 
 if __name__ == "__main__":
