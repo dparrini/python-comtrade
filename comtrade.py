@@ -420,6 +420,13 @@ def _replace_sub(line: str) -> str:
     return line.replace(chr(0x1A), "")
 
 
+def _strip_bom(text: str) -> str:
+    """Remove the UTF-8 byte order mark (BOM) from the start of a decoded
+    text, which is left there when a file with a BOM is decoded as UTF-8
+    instead of UTF-8-SIG."""
+    return text[1:] if text.startswith("\ufeff") else text
+
+
 def _values_list(values) -> list:
     """Return channel values (array.array, numpy array or list) as a list."""
     return values.tolist() if hasattr(values, "tolist") else list(values)
@@ -813,7 +820,7 @@ class Cfg:
         self._leap_second = None
 
         # First line
-        line = cfg.readline()
+        line = _strip_bom(cfg.readline())
         # station, device, and comtrade standard revision information
         packed = _read_sep_values(line)
         if 3 == len(packed):
@@ -1820,7 +1827,7 @@ class Comtrade:
         if os.path.exists(inf_file):
             kwargs["encoding"] = kwargs.get("encoding", "utf-8")
             with open(inf_file, 'r', **kwargs) as file:
-                self._inf = _replace_sub(file.read())
+                self._inf = _replace_sub(_strip_bom(file.read()))
                 if len(self._inf) == 0:
                     self._inf = None
         else:
@@ -1830,7 +1837,7 @@ class Comtrade:
         if os.path.exists(hdr_file):
             kwargs["encoding"] = kwargs.get("encoding", "utf-8")
             with open(hdr_file, 'r', **kwargs) as file:
-                self._hdr = _replace_sub(file.read())
+                self._hdr = _replace_sub(_strip_bom(file.read()))
                 if len(self._hdr) == 0:
                     self._hdr = None
         else:
@@ -1847,7 +1854,8 @@ class Comtrade:
             if current_value != chunk_delimiter:
                 current_chunk.append(current_value)
             else:
-                yield b"".join(current_chunk).decode(encoding, errors="ignore").strip()
+                line = b"".join(current_chunk).decode(encoding, errors="ignore")
+                yield _strip_bom(line).strip()
                 current_chunk = []
 
     def _load_cff(self, cff_file_path: str, **kwargs):
@@ -2204,6 +2212,10 @@ class _AsciiDatReader(_DatReader):
         else:
             lines = contents
         lines = iter(lines)
+        # a UTF-8 BOM may precede the first sample number
+        first_line = next(lines, None)
+        if first_line is not None:
+            lines = itertools.chain([_strip_bom(first_line)], lines)
 
         # Lines are read in blocks and the values of each channel in a block
         # are converted at once, which is much faster than one by one.
