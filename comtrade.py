@@ -1762,13 +1762,16 @@ class Comtrade:
         inf_file = kwargs.get("inf_file", None)
         hdr_file = kwargs.get("hdr_file", None)
         dat_options = {key: kwargs[key] for key in _DAT_OPTIONS if key in kwargs}
+        file_kwargs = {}
+        if "encoding" in kwargs:
+            file_kwargs["encoding"] = kwargs["encoding"]
 
         # which extension: CFG or CFF?
         file_ext = cfg_file[-3:]
         file_ext_upper = file_ext.upper()
         if file_ext_upper == "CFF":
             # check if the CFF file exists
-            self._load_cff(cfg_file, **dat_options)
+            self._load_cff(cfg_file, **dat_options, **file_kwargs)
 
         elif file_ext_upper == "CFG":
             basename = cfg_file[:-3]
@@ -1783,9 +1786,6 @@ class Comtrade:
                 hdr_file = basename + _get_same_case(file_ext, self.EXT_HDR)
 
             # load both cfg and dat
-            file_kwargs = {}
-            if "encoding" in kwargs:
-                file_kwargs["encoding"] = kwargs["encoding"]
             self._load_cfg(cfg_file, **file_kwargs)
             self._load_dat(dat_file, **dat_options)
 
@@ -1835,7 +1835,7 @@ class Comtrade:
             self._hdr = None
 
     @staticmethod
-    def _read_mixed_text_bin_data_as_text(cff_file) -> str:
+    def _read_mixed_text_bin_data_as_text(cff_file, encoding: str = "utf-8") -> str:
         chunk_delimiter = b"\n"
         current_chunk = []
         while True:
@@ -1845,7 +1845,7 @@ class Comtrade:
             if current_value != chunk_delimiter:
                 current_chunk.append(current_value)
             else:
-                yield b"".join(current_chunk).decode("utf-8", errors="ignore").strip()
+                yield b"".join(current_chunk).decode(encoding, errors="ignore").strip()
                 current_chunk = []
 
     def _load_cff(self, cff_file_path: str, **kwargs):
@@ -1855,6 +1855,8 @@ class Comtrade:
         hdr_lines = []
         inf_lines = []
         header_re = re.compile(_CFF_HEADER_REXP)
+        # text encoding of the CFG, HDR and INF sections
+        encoding = kwargs.get("encoding", "utf-8")
 
         with open(cff_file_path, "rb") as cff_file:
             # file type: CFG, HDR, INF, DAT
@@ -1864,7 +1866,8 @@ class Comtrade:
 
             line_number = 0
             last_match = None
-            for current_line in self._read_mixed_text_bin_data_as_text(cff_file):
+            for current_line in self._read_mixed_text_bin_data_as_text(cff_file,
+                                                                       encoding):
                 line_number += 1
                 mobj = header_re.match(current_line.strip().upper())
                 if mobj is not None:
@@ -2208,7 +2211,9 @@ class _AsciiDatReader(_DatReader):
         irow = 0
         past_window = False
         while rows_read < self._total_samples and not past_window:
-            rows = [line.strip().split(self.ASCII_SEPARATOR) for line in
+            # <sub> (0x1A) may appear appended to the end of text files on
+            # some platforms, as in the CFG and INF files
+            rows = [_eof_strip(line).split(self.ASCII_SEPARATOR) for line in
                     itertools.islice(lines, min(block_size, self._total_samples - rows_read))]
             if not rows:
                 break
@@ -2435,8 +2440,10 @@ class _Float32DatReader(_BinaryDatReader):
         self.ANALOG_BYTES = 4
         self.ANALOG_TYPECODE = "f"
 
-        # Maximum negative value
-        self.DATA_MISSING = sys.float_info.min
+        # Most negative single precision value (-3.40282347E+38), the missing
+        # data marker of the FLOAT32 format. It has to be the single precision
+        # value, since the values are converted to double precision when read.
+        self.DATA_MISSING = -3.4028234663852886e+38
 
 
 def load(cfg_or_cff_file_path, dat_file_path=None, **kwargs) -> Comtrade:

@@ -332,6 +332,64 @@ class TestCfgWithSubCharsReading(TestCfg2Reading):
                                                             "tests/sample_files/sample_ascii.dat")
 
 
+class TestAsciiDatWithSubChars(unittest.TestCase):
+    """ASCII DAT files ending with the <sub> (0x1A) control character, as
+    some platforms append to text files."""
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        for ext in ("cfg", "dat"):
+            shutil.copy(f"tests/sample_files/sample_ascii.{ext}",
+                        os.path.join(self.tmp_dir, f"sample.{ext}"))
+        dat_path = os.path.join(self.tmp_dir, "sample.dat")
+        with open(dat_path, "rb") as file:
+            contents = file.read()
+        with open(dat_path, "wb") as file:
+            file.write(contents.rstrip(b"\r\n") + b"\x1a")
+        self.cfg_path = os.path.join(self.tmp_dir, "sample.cfg")
+        self.expected = Comtrade(ignore_warnings=True).load(
+            "tests/sample_files/sample_ascii.cfg")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp_dir)
+
+    def test_load(self):
+        obj = Comtrade(ignore_warnings=True).load(self.cfg_path)
+        self.assertEqual(obj.total_samples, self.expected.total_samples)
+        self.assertEqual(_channel_values(obj), _channel_values(self.expected))
+
+    def test_read(self):
+        # the <sub> character is appended to the last status value
+        obj = Comtrade(ignore_warnings=True)
+        dat = COMTRADE_SAMPLE_1_DAT.rstrip("\n") + "\x1a"
+        obj.read(COMTRADE_SAMPLE_1_CFG, dat)
+        self.assertEqual(obj.total_samples, 2)
+        self.assertAlmostEqual(obj.analog[0][0], 0.0)
+        self.assertAlmostEqual(obj.analog[0][1], -2.762, places=6)
+        self.assertEqual(list(obj.status[0]), [0, 1])
+
+    def test_read_analog_last_value(self):
+        # the <sub> character is appended to the last analog value
+        dat = COMTRADE_SAMPLE_8_DAT.rstrip("\n") + "\x1a"
+        obj = Comtrade(ignore_warnings=True)
+        obj.read(COMTRADE_SAMPLE_8_CFG.format(format="ASCII"), dat)
+        self.assertEqual(obj.total_samples, 3)
+        self.assertEqual([list(values) for values in obj.analog],
+                         [[1, 4, 7], [2, 5, 8], [3, 6, 9]])
+
+    def test_cff(self):
+        contents = ("--- file type: CFG ---\n" + COMTRADE_SAMPLE_1_CFG +
+                    "--- file type: DAT ASCII ---\n" +
+                    COMTRADE_SAMPLE_1_DAT.rstrip("\n") + "\x1a\n")
+        path = os.path.join(self.tmp_dir, "sample.cff")
+        with open(path, "w", encoding="utf-8") as file:
+            file.write(contents)
+        obj = Comtrade(ignore_warnings=True).load(path)
+        self.assertEqual(obj.total_samples, 2)
+        self.assertAlmostEqual(obj.analog[0][0], 0.0)
+        self.assertAlmostEqual(obj.analog[0][1], -2.762, places=6)
+        self.assertEqual(list(obj.status[0]), [0, 1])
+
+
 class TestCffFloat32Reading(unittest.TestCase):
     """Sample CFF file with float32 .dat contents.
     """
@@ -517,6 +575,99 @@ class TestRealBinaryReading(unittest.TestCase):
         self.assertAlmostEqual(1.0 / sample_rate, time_diff)
 
 
+# Most negative single precision value, the FLOAT32 missing data marker.
+FLOAT32_MISSING = -3.4028234663852886e+38
+
+# One analog channel (value = 2 * y + 1) and one status channel.
+COMTRADE_SAMPLE_FLOAT32_MISSING_CFG = """STATION_NAME,EQUIPMENT,2013
+2,1A,1D
+1, IA,,,A,2.0,1.0,0,-3.40282347E+38,3.40282347E+38,1,1,P
+1, Trip,,,0
+60
+1
+1000,3
+01/01/2020,10:30:00.000000
+01/01/2020,10:30:00.000000
+FLOAT32
+1
+"""
+
+
+def _float32_dat(rows) -> bytes:
+    """FLOAT32 DAT file contents of (sample number, timestamp, analog,
+    status) rows."""
+    return b"".join(struct.pack("<IIfH", n, ts, analog, status)
+                    for n, ts, analog, status in rows)
+
+
+class TestFloat32MissingDataReading(unittest.TestCase):
+    """FLOAT32 DAT file missing data (the most negative float32 value)."""
+    use_numpy_arrays = False
+    use_double_precision = False
+
+    def setUp(self):
+        self.comtrade = Comtrade(ignore_warnings=True,
+                                 use_numpy_arrays=self.use_numpy_arrays,
+                                 use_double_precision=self.use_double_precision)
+        self.comtrade.read(COMTRADE_SAMPLE_FLOAT32_MISSING_CFG,
+                           _float32_dat([(1, 0, FLOAT32_MISSING, 0),
+                                         (2, 1000, 4.0, 1),
+                                         (3, 2000, 5.0, 0)]))
+
+    def test_missing_marker(self):
+        reader = comtrade._Float32DatReader()
+        # the missing marker is the 0xFF7FFFFF single precision value
+        self.assertEqual(reader.DATA_MISSING,
+                         struct.unpack("<f", b"\xff\xff\x7f\xff")[0])
+
+    def test_missing_value(self):
+        self.assertTrue(math.isnan(self.comtrade.analog[0][0]))
+
+    def test_missing_value_is_not_scaled(self):
+        # a missing value must not be converted to a (possibly infinite)
+        # measurement
+        self.assertTrue(math.isnan(self.comtrade.analog_primary[0][0]))
+        self.assertTrue(math.isnan(self.comtrade.analog_secondary[0][0]))
+
+    def test_values_after_missing(self):
+        self.assertAlmostEqual(2.0 * 4.0 + 1.0, self.comtrade.analog[0][1])
+        self.assertAlmostEqual(2.0 * 5.0 + 1.0, self.comtrade.analog[0][2])
+
+    def test_large_negative_values_are_not_missing(self):
+        analog = -1.0e+38
+        obj = Comtrade(ignore_warnings=True,
+                       use_numpy_arrays=self.use_numpy_arrays)
+        obj.read(COMTRADE_SAMPLE_FLOAT32_MISSING_CFG,
+                 _float32_dat([(1, 0, analog, 0)]))
+        self.assertFalse(math.isnan(obj.analog[0][0]))
+        single = struct.unpack("<f", struct.pack("<f", analog))[0]
+        expected = 2.0 * single + 1.0
+        self.assertAlmostEqual(expected, obj.analog[0][0],
+                               delta=abs(expected) * 1e-6)
+
+    def test_status_values(self):
+        self.assertEqual(list(self.comtrade.status[0]), [0, 1, 0])
+
+    def test_total_samples(self):
+        self.assertEqual(self.comtrade.total_samples, 3)
+        self.assertEqual(len(self.comtrade.analog[0]), 3)
+        self.assertEqual(len(self.comtrade.time), 3)
+
+    def test_time(self):
+        for t, expected in zip(self.comtrade.time, [0.0, 0.001, 0.002]):
+            self.assertAlmostEqual(t, expected, places=6)
+
+
+class TestFloat32MissingDataReadingDoublePrecision(
+        TestFloat32MissingDataReading):
+    use_double_precision = True
+
+
+@unittest.skipUnless(comtrade._HAS_NUMPY, "numpy is not installed")
+class TestFloat32MissingDataReadingNumpy(TestFloat32MissingDataReading):
+    use_numpy_arrays = True
+
+
 class TestEncodingHandling(unittest.TestCase):
     def test_loading_utf8(self):
         obj = comtrade.load(
@@ -536,6 +687,82 @@ class TestEncodingHandling(unittest.TestCase):
         obj = comtrade.load("tests/sample_files/sample_iso8859-1_bin.cfg", encoding="iso-8859-1")
         self.assertEqual(obj.cfg.station_name, "Estação de Medição")
         self.assertEqual(obj.cfg.rec_dev_id, "Oscilógrafo")
+
+
+CFF_ENCODING_CONTENTS = """--- file type: CFG ---
+Estação de Medição,Oscilógrafo,2013
+2,1A,1D
+1, IA,,,A,2.0,1.0,0,-3.40282347E+38,3.40282347E+38,1,1,P
+1, Trip,,,0
+60
+1
+1000,2
+01/01/2020,10:30:00.000000
+01/01/2020,10:30:00.000000
+ASCII
+1
+
+--- file type: HDR ---
+Relé de proteção
+--- file type: INF ---
+[Public Record_Information]
+Source=Medição
+--- file type: DAT ASCII ---
+1,0,1,0
+2,1000,2,1
+"""
+
+
+class TestCffEncodingHandling(unittest.TestCase):
+    """Text encoding of the CFG, HDR and INF sections of a CFF file."""
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp_dir)
+
+    def _write_cff(self, filename: str, encoding: str) -> str:
+        path = os.path.join(self.tmp_dir, filename)
+        with open(path, "w", encoding=encoding, newline="\n") as file:
+            file.write(CFF_ENCODING_CONTENTS)
+        return path
+
+    def test_iso8859_1(self):
+        path = self._write_cff("sample_latin1.cff", "iso-8859-1")
+        obj = Comtrade(ignore_warnings=True).load(path, encoding="iso-8859-1")
+        self.assertEqual(obj.station_name, "Estação de Medição")
+        self.assertEqual(obj.rec_dev_id, "Oscilógrafo")
+        self.assertEqual(obj.hdr, "Relé de proteção")
+        self.assertEqual(obj.inf_sections()["Public Record_Information"]["Source"],
+                         "Medição")
+
+    def test_utf8(self):
+        path = self._write_cff("sample_utf8.cff", "utf-8")
+        obj = Comtrade(ignore_warnings=True).load(path, encoding="utf-8")
+        self.assertEqual(obj.station_name, "Estação de Medição")
+        self.assertEqual(obj.hdr, "Relé de proteção")
+        self.assertEqual(obj.inf_sections()["Public Record_Information"]["Source"],
+                         "Medição")
+
+    def test_default_encoding_is_utf8(self):
+        path = self._write_cff("sample_utf8.cff", "utf-8")
+        obj = Comtrade(ignore_warnings=True).load(path)
+        self.assertEqual(obj.station_name, "Estação de Medição")
+
+    def test_data_values(self):
+        path = self._write_cff("sample_utf8.cff", "utf-8")
+        obj = Comtrade(ignore_warnings=True).load(path)
+        self.assertEqual(obj.total_samples, 2)
+        # analog values are 2 * y + 1
+        self.assertEqual(list(obj.analog[0]), [3.0, 5.0])
+        self.assertEqual(list(obj.status[0]), [0, 1])
+
+    def test_binary_cff_keeps_the_encoding_option(self):
+        obj = Comtrade(ignore_warnings=True)
+        obj.load("tests/sample_files/sample_float32.cff", encoding="iso-8859-1")
+        self.assertEqual(obj.station_name, "EXAMPLE")
+        self.assertEqual(obj.total_samples, 301)
+        self.assertEqual(obj.status_count, 1)
  
 
 class TestExtensionCaseHandling(unittest.TestCase):
