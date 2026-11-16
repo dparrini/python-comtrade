@@ -1912,8 +1912,10 @@ class _Float32DatReader(_BinaryDatReader):
         self.ANALOG_BYTES = 4
         self.ANALOG_TYPECODE = "f"
 
-        # Maximum negative value
-        self.DATA_MISSING = sys.float_info.min
+        # Most negative single precision value (-3.40282347E+38), the missing
+        # data marker of the FLOAT32 format. It has to be the single precision
+        # value, since the values are converted to double precision when read.
+        self.DATA_MISSING = -3.4028234663852886e+38
 
 
 def load(cfg_or_cff_file_path, dat_file_path=None, **kwargs) -> Comtrade:

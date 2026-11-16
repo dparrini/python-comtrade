@@ -223,7 +223,7 @@ Comtrade dat format and revision year. These are listed in the table next.
 |    1991    |  binary  | `0xFFFF`                      |
 | 1999, 2013 |  binary  | `0x8000` or `-32768`          |
 |    2013    | binary32 | `0x80000000` or `-2147483648` |
-|    2013    | float32  | minimum negative float value  |
+|    2013    | float32  | minimum negative float value (`0xFF7FFFFF`) |
 
 
 #### Time code, local code and time quality (2013 revision)
