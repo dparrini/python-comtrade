@@ -1357,6 +1357,42 @@ class TestMalformedFiles(unittest.TestCase):
             Comtrade(ignore_warnings=True).load(cfg_path)
 
 
+class TestAsciiBlankLines(unittest.TestCase):
+    """ASCII DAT files with blank lines or a lone <sub> (0x1A) EOF marker."""
+    def setUp(self):
+        with open("tests/sample_files/sample_ascii.cfg") as file:
+            self.cfg_text = file.read()
+        with open("tests/sample_files/sample_ascii.dat") as file:
+            self.dat_text = file.read()
+        self.expected = _channel_values(self.read(self.dat_text))
+
+    def read(self, dat_text):
+        obj = Comtrade(ignore_warnings=True)
+        obj.read(self.cfg_text, dat_text)
+        return obj
+
+    def test_blank_lines(self):
+        lines = self.dat_text.splitlines()
+        variants = {
+            "one blank line": lines[:5] + [""] + lines[5:],
+            "blank line between all rows": [text for line in lines
+                                            for text in (line, "")],
+        }
+        for name, dat_lines in variants.items():
+            with self.subTest(name):
+                obj = self.read("\r\n".join(dat_lines) + "\r\n")
+                self.assertEqual(_channel_values(obj), self.expected)
+
+    def test_eof_marker_after_truncated_data(self):
+        # the 1991 and 1999 revisions place the marker on a line of its own
+        dat = "\r\n".join(self.dat_text.splitlines()[:20]) + "\r\n\x1a"
+        obj = self.read(dat)
+        # the marker is not a sample, and only the rows before it are loaded
+        self.assertEqual(obj.total_samples, 20)
+        self.assertEqual(list(obj.analog[0]), self.expected[1][:20])
+        self.assertEqual(list(obj.status[0]), self.expected[1 + 4][:20])
+
+
 @unittest.skipUnless(comtrade._HAS_NUMPY, "numpy is not installed")
 class TestNumpyArraysReading(unittest.TestCase):
     """DAT files read into numpy arrays have the same values as arrays."""
